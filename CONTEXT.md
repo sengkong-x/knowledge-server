@@ -17,7 +17,7 @@ The filesystem-level abstraction over the Vault. Discovers notes and reads raw b
 _Avoid_: FileStore, Repository
 
 **NoteStore**:
-The note-level abstraction that returns parsed `Note` values, built on top of `VaultProvider`. Declared as an interface ahead of its implementation, which arrives once the parser exists.
+The note-level abstraction that returns parsed `Note` values, built on top of `VaultProvider`. Lives in `internal/notes`; its implementation composes a `VaultProvider` with `internal/parser`'s `Parse` function.
 _Avoid_: NoteRepository, DocumentStore
 
 **NoteRef**:
