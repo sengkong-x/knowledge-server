@@ -1,6 +1,6 @@
 # 02 — Knowledge Reader
 
-Status: open
+Status: done
 Blocked by: 01
 
 ## Goal
@@ -20,4 +20,13 @@ Implement the Markdown/YAML parser and the `NoteStore` interface declared in tic
 
 ## Comments
 
-Draft placeholder — original ticket content was lost (see `.scratch/` recovery note in project history) and this is a fresh draft from the roadmap description in `spec.md`, not a reconstruction. Needs a grilling pass before implementation starts.
+Implemented — grilling session resolved the open questions the draft left implicit:
+
+- `internal/parser` stays pure (`Parse(id string, raw []byte) (*Note, error)`, no I/O); `internal/notes` holds `NoteStore` and its `VaultProvider`-backed implementation (see ADR-0003).
+- `Note` gained `Tags`, `Aliases`, `Related []string`, `Status string`, `Created time.Time` alongside the existing `ID`, `Title`, `Body`.
+- `title` and `created` are required; `tags`/`aliases`/`related`/`status` are optional. A note missing frontmatter entirely fails the same "missing required field" check as any other note missing `title` — no separate error path.
+- `status` accepts either a YAML scalar or a single-element list; unknown frontmatter fields are silently ignored (not strict-decoded).
+- `created` parses into `time.Time` via `yaml.v3`'s native timestamp support (bare date or full RFC3339).
+- Frontmatter is split from the body by hand (no frontmatter library), then decoded with the existing `gopkg.in/yaml.v3` dependency. Body is `strings.TrimSpace`'d.
+- `NoteStore.List()` fails fast on the first malformed note. `NoteStore.Load(id)` returns a sentinel `notes.ErrNotFound` (`errors.Is`-checkable) for missing IDs, distinct from parse errors.
+- Tests colocated per package (`internal/parser/parser_test.go`, `internal/notes/notes_test.go`), following the existing `t.TempDir()` + `writeFile` fixture pattern from `internal/vault/vault_test.go`.
