@@ -23,3 +23,11 @@ _Avoid_: NoteRepository, DocumentStore
 **NoteRef**:
 A lightweight reference to a Note before it has been read or parsed — carries only its ID and relative path within the Vault. Returned by `VaultProvider.ListNotes()`.
 _Avoid_: NoteStub, NoteHandle
+
+**Index**:
+A disposable, rebuildable projection of Vault metadata, built from `NoteStore`, that supports lookup by ID and by tag without re-parsing every Note. Lives in `internal/index`. Deleting it never loses knowledge — only rebuild cost.
+_Avoid_: Database, cache (as the primary concept — the on-disk form is a cache, but "Index" is the concept)
+
+**IndexEntry**:
+A single Index record: a Note's ID, title, tags, path, and created timestamp — no Body. Distinct from `NoteRef`, which is pre-parse and carries only ID and path.
+_Avoid_: NoteRef (that's the pre-parse form), NoteSummary
