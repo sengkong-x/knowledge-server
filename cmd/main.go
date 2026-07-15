@@ -7,7 +7,10 @@ import (
 	"os"
 
 	"github.com/sengkong/knowledge-server/internal/config"
+	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/logger"
+	"github.com/sengkong/knowledge-server/internal/notes"
+	"github.com/sengkong/knowledge-server/internal/search"
 	"github.com/sengkong/knowledge-server/internal/server"
 	"github.com/sengkong/knowledge-server/internal/vault"
 )
@@ -30,7 +33,27 @@ func main() {
 	}
 
 	provider := vault.NewLocalVaultProvider(cfg.Vault.Path)
-	handler := server.New(cfg.Vault.Path, provider)
+	store := notes.NewVaultNoteStore(provider)
+
+	idx, idxReport, err := index.Build(provider, store)
+	if err != nil {
+		log.Error("building index", "error", err)
+		os.Exit(1)
+	}
+	for id, parseErr := range idxReport.Failed {
+		log.Warn("note failed to index", "id", id, "error", parseErr)
+	}
+
+	ss, ssReport, err := search.Build(provider, store)
+	if err != nil {
+		log.Error("building search store", "error", err)
+		os.Exit(1)
+	}
+	for id, parseErr := range ssReport.Failed {
+		log.Warn("note failed to index for search", "id", id, "error", parseErr)
+	}
+
+	handler := server.New(cfg.Vault.Path, provider, idx, ss)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Info("starting server", "addr", addr, "vault", cfg.Vault.Path)

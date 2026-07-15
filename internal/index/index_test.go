@@ -8,18 +8,8 @@ import (
 
 	"github.com/sengkong/knowledge-server/internal/notes"
 	"github.com/sengkong/knowledge-server/internal/vault"
+	"github.com/sengkong/knowledge-server/internal/vaultfixture"
 )
-
-func writeFile(t *testing.T, root, rel, content string) {
-	t.Helper()
-	full := filepath.Join(root, rel)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		t.Fatalf("creating dir for %s: %v", rel, err)
-	}
-	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-		t.Fatalf("writing %s: %v", rel, err)
-	}
-}
 
 // buildIndex builds an Index over root, returning the provider and store
 // used so callers can exercise Upsert without rebuilding them.
@@ -45,7 +35,7 @@ Body text.
 
 func TestBuild_IndexesNotesFromVault(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
 
 	idx, _, _, _ := buildIndex(t, root)
 
@@ -63,8 +53,8 @@ func TestBuild_IndexesNotesFromVault(t *testing.T) {
 
 func TestBuild_SkipsAndRecordsMalformedNotes(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
-	writeFile(t, root, "linux/broken.md", "# No frontmatter here.\n")
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/broken.md", "# No frontmatter here.\n")
 
 	idx, report, _, _ := buildIndex(t, root)
 
@@ -81,8 +71,8 @@ func TestBuild_SkipsAndRecordsMalformedNotes(t *testing.T) {
 
 func TestByTag_ReturnsEntriesWithMatchingTag(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
-	writeFile(t, root, "cooking/pasta.md", `---
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
 title: Pasta
 tags: [food]
 created: 2026-07-12
@@ -104,11 +94,11 @@ Boil water.
 
 func TestUpsert_AddsNewNoteToIndex(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
 
 	idx, _, _, _ := buildIndex(t, root)
 
-	writeFile(t, root, "linux/memory.md", `---
+	vaultfixture.WriteNote(t, root, "linux/memory.md", `---
 title: Memory
 created: 2026-07-13
 ---
@@ -130,11 +120,11 @@ Memory body.
 
 func TestUpsert_ReplacesExistingEntry(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
 
 	idx, _, _, _ := buildIndex(t, root)
 
-	writeFile(t, root, "linux/process.md", `---
+	vaultfixture.WriteNote(t, root, "linux/process.md", `---
 title: Process (renamed)
 created: 2026-07-12
 ---
@@ -156,7 +146,7 @@ Body text.
 
 func TestRemove_DropsEntryFromIndex(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
 
 	idx, _, _, _ := buildIndex(t, root)
 
@@ -169,7 +159,7 @@ func TestRemove_DropsEntryFromIndex(t *testing.T) {
 
 func TestSaveLoad_RoundTripsEntries(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
 
 	idx, _, provider, store := buildIndex(t, root)
 
@@ -194,8 +184,8 @@ func TestSaveLoad_RoundTripsEntries(t *testing.T) {
 
 func TestDeleteAndRebuild_ProducesSemanticallyIdenticalIndex(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
-	writeFile(t, root, "cooking/pasta.md", `---
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
 title: Pasta
 tags: [food]
 created: 2026-07-12
@@ -231,7 +221,7 @@ Boil water.
 
 func TestUpsert_ReturnsErrorForNoteMissingFromVault(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
 
 	idx, _, _, _ := buildIndex(t, root)
 

@@ -2,7 +2,6 @@ package index
 
 import (
 	"encoding/gob"
-	"fmt"
 	"os"
 	"slices"
 	"time"
@@ -19,6 +18,11 @@ type IndexEntry struct {
 	Tags    []string
 	Path    string
 	Created time.Time
+}
+
+// HasTag reports whether tag is among the entry's Tags.
+func (e IndexEntry) HasTag(tag string) bool {
+	return slices.Contains(e.Tags, tag)
 }
 
 // Index is a disposable, rebuildable projection of Vault metadata.
@@ -51,32 +55,13 @@ func (idx *Index) Upsert(id string) error {
 		return err
 	}
 
-	path := idx.entries[id].Path
-	if path == "" {
-		found, err := refPath(idx.provider, id)
-		if err != nil {
-			return err
-		}
-		path = found
+	path, err := vault.ResolvePath(idx.entries[id].Path, idx.provider, id)
+	if err != nil {
+		return err
 	}
 
 	idx.entries[id] = entryFromNote(note, path)
 	return nil
-}
-
-// refPath resolves id's path by listing the Vault, since VaultProvider has
-// no single-ref lookup.
-func refPath(provider vault.VaultProvider, id string) (string, error) {
-	refs, err := provider.ListNotes()
-	if err != nil {
-		return "", err
-	}
-	for _, ref := range refs {
-		if ref.ID == id {
-			return ref.Path, nil
-		}
-	}
-	return "", fmt.Errorf("index: no path found for note %q", id)
 }
 
 // Save persists the Index to path using gob encoding (see ADR-0004).
@@ -115,7 +100,7 @@ func (idx *Index) Remove(id string) {
 func (idx *Index) ByTag(tag string) []IndexEntry {
 	var matches []IndexEntry
 	for _, entry := range idx.entries {
-		if slices.Contains(entry.Tags, tag) {
+		if entry.HasTag(tag) {
 			matches = append(matches, entry)
 		}
 	}
