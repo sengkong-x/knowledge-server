@@ -66,6 +66,31 @@ func (p *localVaultProvider) ReadAsset(path string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(p.root, filepath.FromSlash(path)))
 }
 
+// ResolvePath returns existingPath if non-empty, otherwise resolves id's
+// path via RefPath. Used by disposable-index Upsert methods (Index,
+// SearchStore) to avoid a full vault scan when the entry is already known.
+func ResolvePath(existingPath string, provider VaultProvider, id string) (string, error) {
+	if existingPath != "" {
+		return existingPath, nil
+	}
+	return RefPath(provider, id)
+}
+
+// RefPath resolves id's path by listing the Vault, since VaultProvider has
+// no single-ref lookup.
+func RefPath(provider VaultProvider, id string) (string, error) {
+	refs, err := provider.ListNotes()
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.ID == id {
+			return ref.Path, nil
+		}
+	}
+	return "", fmt.Errorf("vault: no path found for note %q", id)
+}
+
 func ValidateRoot(root string) error {
 	info, err := os.Stat(root)
 	if err != nil {

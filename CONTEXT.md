@@ -31,3 +31,7 @@ _Avoid_: Database, cache (as the primary concept — the on-disk form is a cache
 **IndexEntry**:
 A single Index record: a Note's ID, title, tags, path, and created timestamp — no Body. Distinct from `NoteRef`, which is pre-parse and carries only ID and path.
 _Avoid_: NoteRef (that's the pre-parse form), NoteSummary
+
+**SearchStore**:
+A disposable, rebuildable structure holding normalized full text (title, body, and aliases) per Note, for substring search. Built from `NoteStore`, lives in `internal/search`. Distinct from `Index`: `Index` supports exact ID/tag lookup over metadata, `SearchStore` supports substring matching over text content. Matches any contiguous substring, including mid-word (e.g. "lock" matches "Clock") — not token/word-boundary search.
+_Avoid_: Index (that term is reserved for `internal/index`), SearchIndex, Corpus

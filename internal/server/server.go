@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/sengkong/knowledge-server/internal/index"
+	"github.com/sengkong/knowledge-server/internal/search"
 	"github.com/sengkong/knowledge-server/internal/vault"
 )
 
@@ -12,7 +14,15 @@ type healthResponse struct {
 	NoteCount int    `json:"note_count"`
 }
 
-func New(vaultPath string, provider vault.VaultProvider) http.Handler {
+type searchResultResponse struct {
+	ID      string   `json:"id"`
+	Title   string   `json:"title"`
+	Path    string   `json:"path"`
+	Tags    []string `json:"tags"`
+	Snippet string   `json:"snippet"`
+}
+
+func New(vaultPath string, provider vault.VaultProvider, idx *index.Index, ss *search.SearchStore) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -27,6 +37,48 @@ func New(vaultPath string, provider vault.VaultProvider) http.Handler {
 			VaultPath: vaultPath,
 			NoteCount: len(notes),
 		})
+	})
+
+	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		tag := r.URL.Query().Get("tag")
+		if q == "" && tag == "" {
+			http.Error(w, "missing q or tag parameter", http.StatusBadRequest)
+			return
+		}
+
+		// snippets holds the matched-text excerpt per note ID when q is
+		// given; tag-only results have no snippet, since they didn't come
+		// from a text query.
+		var candidates []index.IndexEntry
+		snippets := make(map[string]string)
+		if q != "" {
+			for _, m := range ss.Query(q) {
+				if entry, ok := idx.ByID(m.ID); ok {
+					candidates = append(candidates, entry)
+					snippets[m.ID] = m.Snippet
+				}
+			}
+		} else {
+			candidates = idx.ByTag(tag)
+		}
+
+		results := make([]searchResultResponse, 0, len(candidates))
+		for _, entry := range candidates {
+			if q != "" && tag != "" && !entry.HasTag(tag) {
+				continue
+			}
+			results = append(results, searchResultResponse{
+				ID:      entry.ID,
+				Title:   entry.Title,
+				Path:    entry.Path,
+				Tags:    entry.Tags,
+				Snippet: snippets[entry.ID],
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
 	})
 
 	return mux
