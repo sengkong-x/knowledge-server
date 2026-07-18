@@ -35,6 +35,16 @@ type BuildReport struct {
 	Failed map[string]error
 }
 
+// LoadOrBuild loads the Graph from path if present, falling back to a full
+// Build from the Vault if the cache is missing or fails to decode (see
+// ADR-0010).
+func LoadOrBuild(path string, provider vault.VaultProvider, store notes.NoteStore) (*Graph, BuildReport, error) {
+	if g, err := Load(path, provider, store); err == nil {
+		return g, BuildReport{Failed: make(map[string]error)}, nil
+	}
+	return Build(provider, store)
+}
+
 // Neighbors returns the direct (1-hop) neighbor IDs of id, sorted.
 func (g *Graph) Neighbors(id string) ([]string, error) {
 	entry, ok := g.entries[id]
@@ -104,6 +114,15 @@ func (g *Graph) Orphans() []string {
 	}
 	sort.Strings(orphans)
 	return orphans
+}
+
+// All returns every node in the Graph.
+func (g *Graph) All() []GraphEntry {
+	entries := make([]GraphEntry, 0, len(g.entries))
+	for _, entry := range g.entries {
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // Upsert re-parses id and replaces its outgoing edges. Since edges are

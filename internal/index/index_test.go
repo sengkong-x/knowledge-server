@@ -69,6 +69,33 @@ func TestBuild_SkipsAndRecordsMalformedNotes(t *testing.T) {
 	}
 }
 
+func TestAll_ReturnsEveryIndexedEntry(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
+title: Pasta
+tags: [food]
+created: 2026-07-12
+---
+Boil water.
+`)
+
+	idx, _, _, _ := buildIndex(t, root)
+
+	got := idx.All()
+	if len(got) != 2 {
+		t.Fatalf("All() returned %d entries, want 2: %+v", len(got), got)
+	}
+
+	ids := map[string]bool{}
+	for _, entry := range got {
+		ids[entry.ID] = true
+	}
+	if !ids["linux/process"] || !ids["cooking/pasta"] {
+		t.Errorf("All() = %+v, want entries for linux/process and cooking/pasta", got)
+	}
+}
+
 func TestByTag_ReturnsEntriesWithMatchingTag(t *testing.T) {
 	root := t.TempDir()
 	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
@@ -179,6 +206,56 @@ func TestSaveLoad_RoundTripsEntries(t *testing.T) {
 	}
 	if entry.Title != "Process" {
 		t.Errorf("Title = %q, want %q", entry.Title, "Process")
+	}
+}
+
+func TestLoadOrBuild_LoadsFromCacheWhenPresent(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
+
+	idx, _, provider, store := buildIndex(t, root)
+	cachePath := filepath.Join(t.TempDir(), "index.gob")
+	if err := idx.Save(cachePath); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	// Change the vault after saving; if LoadOrBuild used the cache instead
+	// of rebuilding, it won't see this new note.
+	vaultfixture.WriteNote(t, root, "linux/memory.md", `---
+title: Memory
+created: 2026-07-13
+---
+Memory body.
+`)
+
+	loaded, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+
+	if _, ok := loaded.ByID("linux/memory"); ok {
+		t.Fatal("ByID(linux/memory) found, want LoadOrBuild to have used the stale cache, not rebuilt")
+	}
+	if _, ok := loaded.ByID("linux/process"); !ok {
+		t.Fatal("ByID(linux/process) not found, want the cached entry present")
+	}
+}
+
+func TestLoadOrBuild_FallsBackToBuildWhenCacheMissing(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", validNote)
+
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+	cachePath := filepath.Join(t.TempDir(), "does-not-exist.gob")
+
+	idx, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+
+	if _, ok := idx.ByID("linux/process"); !ok {
+		t.Fatal("ByID(linux/process) not found, want a fresh Build from the vault")
 	}
 }
 

@@ -1,0 +1,7 @@
+# Coarse-grained mutex at the wiring layer, not inside the engines
+
+Once the Watcher runs in its own goroutine calling `Upsert`/`Remove` on `Index`, `SearchStore`, and `Graph` while HTTP handlers concurrently read from them, something has to guard against data races — none of the three types have any internal locking today, because they were only ever built and read single-threaded at startup. We considered adding a `sync.RWMutex` inside each of the three types, against rebuild-and-swap (every change triggers a full `Build()` off to the side, then an atomic pointer swap), against a single mutex owned by the layer that wires the Watcher and HTTP server together. We chose the wiring-layer mutex: `internal/index`, `internal/search`, and `internal/graph` stay simple, single-threaded, disposable-cache engines exactly as designed (see their `CONTEXT.md` definitions), and the one new concern — concurrent access — is centralized in the one new place that actually introduces it. Rebuild-and-swap was rejected because it reintroduces the "editing one note re-scans everything" cost that `Upsert`'s incremental design specifically exists to avoid.
+
+## Consequences
+
+Any new caller of `Index`/`SearchStore`/`Graph` outside the wiring layer (e.g. a future CLI command or batch job) must take on locking itself if it runs concurrently with the server — the three engines will not protect themselves. This is a deliberate boundary: don't "fix" it by pushing `sync.RWMutex` into the engines themselves without revisiting this decision first.

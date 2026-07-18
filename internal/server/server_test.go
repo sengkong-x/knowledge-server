@@ -1,21 +1,30 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sengkong/knowledge-server/internal/graph"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
 	"github.com/sengkong/knowledge-server/internal/search"
+	"github.com/sengkong/knowledge-server/internal/state"
 	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/internal/vaultfixture"
 )
 
 func newTestHandler(t *testing.T, root string) http.Handler {
+	t.Helper()
+	handler, _ := newTestHandlerWithState(t, root)
+	return handler
+}
+
+func newTestHandlerWithState(t *testing.T, root string) (http.Handler, *state.State) {
 	t.Helper()
 	provider := vault.NewLocalVaultProvider(root)
 	store := notes.NewVaultNoteStore(provider)
@@ -33,7 +42,8 @@ func newTestHandler(t *testing.T, root string) http.Handler {
 		t.Fatalf("graph.Build returned error: %v", err)
 	}
 
-	return New(root, provider, idx, ss, g)
+	s := state.New(idx, ss, g)
+	return New(root, provider, store, s, "light"), s
 }
 
 const clockNote = `---
@@ -354,6 +364,323 @@ C body.
 	}
 }
 
+func TestNoteDetail_RendersGoldmarkHTMLOfBody(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", `---
+title: Hybrid Logical Clock
+created: 2026-07-12
+---
+# Overview
+
+Combines **physical time** with a logical counter.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/notes/distributed-systems/hlc", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Hybrid Logical Clock") {
+		t.Errorf("body = %q, want it to contain the note's title", body)
+	}
+	if !strings.Contains(body, "<h1>Overview</h1>") {
+		t.Errorf("body = %q, want goldmark-rendered <h1>Overview</h1>", body)
+	}
+	if !strings.Contains(body, "<strong>physical time</strong>") {
+		t.Errorf("body = %q, want goldmark-rendered <strong>physical time</strong>", body)
+	}
+}
+
+func TestNoteDetail_ListsGraphNeighborsAsRelatedNotes(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/notes/a", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/notes/b"`) {
+		t.Errorf("body = %q, want a link to related note b", body)
+	}
+}
+
+func TestNoteDetail_ReturnsNotFoundForUnknownID(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+created: 2026-07-12
+---
+Body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/notes/does-not-exist", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGraphData_ReturnsFullNodeAndEdgeSet(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/data", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got graphDataResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+
+	if len(got.Nodes) != 2 {
+		t.Fatalf("Nodes = %+v, want 2 nodes", got.Nodes)
+	}
+	nodeIDs := map[string][]string{}
+	for _, n := range got.Nodes {
+		nodeIDs[n.ID] = n.Neighbors
+	}
+	if len(nodeIDs["a"]) != 1 || nodeIDs["a"][0] != "b" {
+		t.Errorf("node a neighbors = %v, want [b]", nodeIDs["a"])
+	}
+	if len(nodeIDs["b"]) != 1 || nodeIDs["b"][0] != "a" {
+		t.Errorf("node b neighbors = %v, want [a]", nodeIDs["b"])
+	}
+}
+
+func TestBrowse_ListsAllNotes(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", `---
+title: Process
+created: 2026-07-12
+---
+Body.
+`)
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
+title: Pasta
+created: 2026-07-12
+---
+Body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Process") || !strings.Contains(body, "Pasta") {
+		t.Errorf("body = %q, want it to list both note titles", body)
+	}
+}
+
+func TestBrowse_FiltersByTag(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", `---
+title: Process
+tags: [kernel]
+created: 2026-07-12
+---
+Body.
+`)
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
+title: Pasta
+tags: [food]
+created: 2026-07-12
+---
+Body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/?tag=kernel", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Process") {
+		t.Errorf("body = %q, want it to include Process", body)
+	}
+	if strings.Contains(body, "Pasta") {
+		t.Errorf("body = %q, want it to exclude Pasta when filtered by tag=kernel", body)
+	}
+}
+
+func TestSearchUI_RendersMatchingResults(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", clockNote)
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
+title: Pasta
+created: 2026-07-12
+---
+Boil water.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/search/ui?q=logical", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Hybrid Logical Clock") {
+		t.Errorf("body = %q, want it to include the matching note's title", body)
+	}
+	if strings.Contains(body, "Pasta") {
+		t.Errorf("body = %q, want it to exclude the non-matching note", body)
+	}
+}
+
+func TestSearchUI_RendersEmptyFormWithNoQuery(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", clockNote)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/search/ui", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if strings.Contains(rec.Body.String(), "Hybrid Logical Clock") {
+		t.Errorf("body = %q, want no results when no query given", rec.Body.String())
+	}
+}
+
+func TestGraphUI_RendersCytoscapeContainer(t *testing.T) {
+	root := t.TempDir()
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/ui", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="cy"`) {
+		t.Errorf("body = %q, want a Cytoscape container element", body)
+	}
+	if !strings.Contains(body, "/graph/data") {
+		t.Errorf("body = %q, want it to fetch /graph/data", body)
+	}
+}
+
+func TestEvents_BroadcastsPingOnChange(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "process.md", "---\ntitle: Process\ncreated: 2026-07-12\n---\nBody.\n")
+
+	handler, s := newTestHandlerWithState(t, root)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/events")
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", resp.Header.Get("Content-Type"))
+	}
+
+	// Give the handler a moment to register its subscription before we
+	// trigger a change, since the HTTP round trip above only guarantees
+	// headers were flushed, not that Subscribe has run yet.
+	time.Sleep(50 * time.Millisecond)
+	if err := s.Upsert("process"); err != nil {
+		t.Fatalf("Upsert returned error: %v", err)
+	}
+
+	line := make(chan string, 1)
+	go func() {
+		reader := bufio.NewReader(resp.Body)
+		for {
+			l, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if strings.TrimSpace(l) != "" {
+				line <- l
+				return
+			}
+		}
+	}()
+
+	select {
+	case got := <-line:
+		if !strings.HasPrefix(got, "data:") {
+			t.Errorf("line = %q, want an SSE data: line", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SSE ping after Upsert")
+	}
+}
+
 func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
 	provider := &fakeVaultProvider{notes: []vault.NoteRef{
 		{ID: "linux/process", Path: "linux/process.md"},
@@ -374,7 +701,7 @@ func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
 		t.Fatalf("graph.Build returned error: %v", err)
 	}
 
-	handler := New("/srv/knowledge", provider, idx, ss, g)
+	handler := New("/srv/knowledge", provider, store, state.New(idx, ss, g), "light")
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()

@@ -192,6 +192,54 @@ func TestSaveLoad_RoundTripsEntries(t *testing.T) {
 	}
 }
 
+func TestLoadOrBuild_LoadsFromCacheWhenPresent(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", clockNote)
+
+	ss, _, provider, store := buildSearchStoreWithDeps(t, root)
+	cachePath := filepath.Join(t.TempDir(), "search.gob")
+	if err := ss.Save(cachePath); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	vaultfixture.WriteNote(t, root, "cooking/pasta.md", `---
+title: Pasta
+created: 2026-07-12
+---
+Boil water.
+`)
+
+	loaded, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+
+	if got := loaded.Query("water"); len(got) != 0 {
+		t.Fatalf("Query(water) = %+v, want LoadOrBuild to have used the stale cache, not rebuilt", got)
+	}
+	if got := loaded.Query("Logical"); len(got) != 1 {
+		t.Fatalf("Query(Logical) = %+v, want the cached entry present", got)
+	}
+}
+
+func TestLoadOrBuild_FallsBackToBuildWhenCacheMissing(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", clockNote)
+
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+	cachePath := filepath.Join(t.TempDir(), "does-not-exist.gob")
+
+	ss, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+
+	if got := ss.Query("Logical"); len(got) != 1 {
+		t.Fatalf("Query(Logical) = %+v, want a fresh Build from the vault", got)
+	}
+}
+
 func TestQuery_MatchesMidWordSubstringCaseInsensitively(t *testing.T) {
 	root := t.TempDir()
 	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", clockNote)
