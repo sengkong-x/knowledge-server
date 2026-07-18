@@ -28,17 +28,19 @@ func New(e *engines.Engines) *State {
 	return &State{e: e}
 }
 
-// Upsert re-indexes id across Index, SearchStore, and Graph.
+// Upsert re-indexes id across Index, SearchStore, and Graph. notify fires
+// even if UpsertAll returns an error: Index and SearchStore each have a
+// failure path (vault.ResolvePath) that Graph doesn't share, so one engine
+// can succeed while another fails — an occasional spurious ping on total
+// failure is cheaper than a real update going un-reflected (see ADR-0009 on
+// the generic ping already tolerating irrelevant re-fetches).
 func (s *State) Upsert(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := s.e.UpsertAll(id); err != nil {
-		return err
-	}
-
+	err := s.e.UpsertAll(id)
 	s.notify()
-	return nil
+	return err
 }
 
 // Remove drops id from Index, SearchStore, and Graph.

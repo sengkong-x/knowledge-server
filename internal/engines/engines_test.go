@@ -68,6 +68,33 @@ func TestUpsertAll_AggregatesErrorAcrossAllThreeEngines(t *testing.T) {
 	}
 }
 
+func TestUpsertAll_PartialFailure_GraphSucceedsWhileIndexAndSearchFail(t *testing.T) {
+	root := t.TempDir()
+	provider := &vaultfixture.HidingProvider{VaultProvider: vault.NewLocalVaultProvider(root), Hide: "memory"}
+	store := notes.NewVaultNoteStore(provider)
+
+	e, _, err := engines.Build(provider, store)
+	if err != nil {
+		t.Fatalf("engines.Build: %v", err)
+	}
+
+	vaultfixture.WriteNote(t, root, "memory.md", "---\ntitle: Memory\ncreated: 2026-07-13\n---\nBody.\n")
+
+	err = e.UpsertAll("memory")
+	if err == nil {
+		t.Fatal("UpsertAll(memory) returned nil, want an error from Index and SearchStore")
+	}
+	if _, ok := e.Index().ByID("memory"); ok {
+		t.Error("Index().ByID(memory) found an entry despite Index's Upsert failing")
+	}
+	if got := e.Search().Query("Memory"); len(got) != 0 {
+		t.Errorf("Search().Query(Memory) = %v, want no results (SearchStore's Upsert should have failed)", got)
+	}
+	if _, err := e.Graph().Neighbors("memory"); err != nil {
+		t.Errorf("Graph().Neighbors(memory) returned error %v, want Graph's Upsert to have succeeded", err)
+	}
+}
+
 func TestRemoveAll_DropsFromIndexSearchAndGraph(t *testing.T) {
 	root := t.TempDir()
 	vaultfixture.WriteNote(t, root, "process.md", "---\ntitle: Process\ncreated: 2026-07-12\n---\nBody.\n")

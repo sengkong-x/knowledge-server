@@ -26,6 +26,39 @@ func buildState(t *testing.T, root string) (*State, vault.VaultProvider, notes.N
 	return New(e), provider, store
 }
 
+func TestSubscribe_NotifiedOnUpsert_GenuinePartialFailure(t *testing.T) {
+	root := t.TempDir()
+	provider := &vaultfixture.HidingProvider{VaultProvider: vault.NewLocalVaultProvider(root), Hide: "memory"}
+	store := notes.NewVaultNoteStore(provider)
+
+	e, _, err := engines.Build(provider, store)
+	if err != nil {
+		t.Fatalf("engines.Build: %v", err)
+	}
+	s := New(e)
+
+	ch, unsubscribe := s.Subscribe()
+	defer unsubscribe()
+
+	vaultfixture.WriteNote(t, root, "memory.md", "---\ntitle: Memory\ncreated: 2026-07-13\n---\nBody.\n")
+
+	if err := s.Upsert("memory"); err == nil {
+		t.Fatal("Upsert(memory) returned nil, want an error from Index and SearchStore")
+	}
+	if _, ok := s.ByID("memory"); ok {
+		t.Error("ByID(memory) found an entry despite Index's Upsert failing")
+	}
+	if _, err := s.Neighbors("memory"); err != nil {
+		t.Errorf("Neighbors(memory) returned error %v, want Graph's Upsert to have succeeded", err)
+	}
+
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for change notification after a partially-failed Upsert — Graph did change")
+	}
+}
+
 func TestUpsert_UpdatesIndex(t *testing.T) {
 	root := t.TempDir()
 	vaultfixture.WriteNote(t, root, "process.md", "---\ntitle: Process\ncreated: 2026-07-12\n---\nBody.\n")
@@ -173,6 +206,28 @@ func TestSubscribe_NotifiedOnUpsert(t *testing.T) {
 	case <-ch:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for change notification after Upsert")
+	}
+}
+
+func TestSubscribe_NotifiedOnUpsertEvenWhenAllEnginesFail(t *testing.T) {
+	root := t.TempDir()
+	s, _, _ := buildState(t, root)
+
+	ch, unsubscribe := s.Subscribe()
+	defer unsubscribe()
+
+	// "missing" was never written to the Vault, so UpsertAll fails for every
+	// engine — notify still fires, since Index/SearchStore and Graph don't
+	// share every failure path (see State.Upsert's doc comment) and a
+	// missed ping is worse than a spurious one.
+	if err := s.Upsert("missing"); err == nil {
+		t.Fatal("Upsert(missing) returned nil, want an error")
+	}
+
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for change notification after a failed Upsert")
 	}
 }
 
