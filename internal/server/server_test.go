@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/sengkong/knowledge-server/internal/graph"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
 	"github.com/sengkong/knowledge-server/internal/search"
@@ -26,8 +28,12 @@ func newTestHandler(t *testing.T, root string) http.Handler {
 	if err != nil {
 		t.Fatalf("search.Build returned error: %v", err)
 	}
+	g, _, err := graph.Build(provider, store)
+	if err != nil {
+		t.Fatalf("graph.Build returned error: %v", err)
+	}
 
-	return New(root, provider, idx, ss)
+	return New(root, provider, idx, ss, g)
 }
 
 const clockNote = `---
@@ -164,6 +170,190 @@ func TestSearch_ReturnsBadRequestWhenNeitherQNorTagGiven(t *testing.T) {
 	}
 }
 
+func TestGraphNeighbors_ReturnsDirectNeighbors(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/neighbors?id=b", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got neighborsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if len(got.Neighbors) != 1 || got.Neighbors[0] != "a" {
+		t.Fatalf("neighbors = %v, want [a]", got.Neighbors)
+	}
+}
+
+func TestGraphNeighbors_ReturnsNotFoundForUnknownID(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+created: 2026-07-12
+---
+A body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/neighbors?id=does-not-exist", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGraphPath_ReturnsShortestPath(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/path?from=a&to=b", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got pathResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if !got.Found {
+		t.Fatal("found = false, want true")
+	}
+	want := []string{"a", "b"}
+	if len(got.Path) != len(want) || got.Path[0] != want[0] || got.Path[1] != want[1] {
+		t.Fatalf("path = %v, want %v", got.Path, want)
+	}
+}
+
+func TestGraphPath_ReturnsNotFoundForUnknownID(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+created: 2026-07-12
+---
+A body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/path?from=a&to=does-not-exist", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGraphPath_ReturnsEmptyArrayNotNullWhenDisconnected(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/path?from=a&to=b", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if strings.Contains(rec.Body.String(), `"path":null`) {
+		t.Errorf("body = %q, want \"path\":[] not \"path\":null", rec.Body.String())
+	}
+}
+
+func TestGraphOrphans_ReturnsNotesWithZeroEdges(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+	vaultfixture.WriteNote(t, root, "c.md", `---
+title: C
+created: 2026-07-12
+---
+C body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/orphans", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got orphansResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if len(got.Orphans) != 1 || got.Orphans[0] != "c" {
+		t.Fatalf("orphans = %v, want [c]", got.Orphans)
+	}
+}
+
 func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
 	provider := &fakeVaultProvider{notes: []vault.NoteRef{
 		{ID: "linux/process", Path: "linux/process.md"},
@@ -179,8 +369,12 @@ func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search.Build returned error: %v", err)
 	}
+	g, _, err := graph.Build(provider, store)
+	if err != nil {
+		t.Fatalf("graph.Build returned error: %v", err)
+	}
 
-	handler := New("/srv/knowledge", provider, idx, ss)
+	handler := New("/srv/knowledge", provider, idx, ss, g)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()

@@ -35,3 +35,11 @@ _Avoid_: NoteRef (that's the pre-parse form), NoteSummary
 **SearchStore**:
 A disposable, rebuildable structure holding normalized full text (title, body, and aliases) per Note, for substring search. Built from `NoteStore`, lives in `internal/search`. Distinct from `Index`: `Index` supports exact ID/tag lookup over metadata, `SearchStore` supports substring matching over text content. Matches any contiguous substring, including mid-word (e.g. "lock" matches "Clock") — not token/word-boundary search.
 _Avoid_: Index (that term is reserved for `internal/index`), SearchIndex, Corpus
+
+**Graph**:
+A disposable, rebuildable undirected relationship graph over Notes, built from `NoteStore`, lives in `internal/graph`. Edges come only from the `related` frontmatter field, resolved by Note ID — not from aliases, and not from in-body links (a future engine's territory, see ADR-0006). `related: [B]` on note A declares a single shared edge between A and B regardless of whether B lists A back. Supports direct neighbor lookup, unweighted shortest path, and orphan detection (notes with zero edges).
+_Avoid_: Backlinks (implies directionality this graph doesn't have), LinkGraph
+
+**GraphEntry**:
+A single Graph node: a Note's ID and its resolved set of neighbor IDs. `related` entries that don't resolve to an existing Note ID are dropped when building edges (not represented as phantom nodes) and reported in the graph's `BuildReport`, mirroring `index.BuildReport`. Self-references and duplicate `related` entries are silently normalized to no-ops.
+_Avoid_: Node (too generic outside the graph package itself), GraphNode

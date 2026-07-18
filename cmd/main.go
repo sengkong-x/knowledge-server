@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/sengkong/knowledge-server/internal/config"
+	"github.com/sengkong/knowledge-server/internal/graph"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/logger"
 	"github.com/sengkong/knowledge-server/internal/notes"
@@ -53,7 +54,16 @@ func main() {
 		log.Warn("note failed to index for search", "id", id, "error", parseErr)
 	}
 
-	handler := server.New(cfg.Vault.Path, provider, idx, ss)
+	g, gReport, err := graph.Build(provider, store)
+	if err != nil {
+		log.Error("building graph", "error", err)
+		os.Exit(1)
+	}
+	for id, buildErr := range gReport.Failed {
+		log.Warn("note failed to graph", "id", id, "error", buildErr)
+	}
+
+	handler := server.New(cfg.Vault.Path, provider, idx, ss, g)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Info("starting server", "addr", addr, "vault", cfg.Vault.Path)
