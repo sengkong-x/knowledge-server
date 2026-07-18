@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/sengkong/knowledge-server/internal/graph"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/search"
 	"github.com/sengkong/knowledge-server/internal/vault"
@@ -22,7 +23,20 @@ type searchResultResponse struct {
 	Snippet string   `json:"snippet"`
 }
 
-func New(vaultPath string, provider vault.VaultProvider, idx *index.Index, ss *search.SearchStore) http.Handler {
+type neighborsResponse struct {
+	Neighbors []string `json:"neighbors"`
+}
+
+type pathResponse struct {
+	Path  []string `json:"path"`
+	Found bool     `json:"found"`
+}
+
+type orphansResponse struct {
+	Orphans []string `json:"orphans"`
+}
+
+func New(vaultPath string, provider vault.VaultProvider, idx *index.Index, ss *search.SearchStore, g *graph.Graph) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +93,36 @@ func New(vaultPath string, provider vault.VaultProvider, idx *index.Index, ss *s
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(results)
+	})
+
+	mux.HandleFunc("GET /graph/neighbors", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		neighbors, err := g.Neighbors(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(neighborsResponse{Neighbors: neighbors})
+	})
+
+	mux.HandleFunc("GET /graph/path", func(w http.ResponseWriter, r *http.Request) {
+		from := r.URL.Query().Get("from")
+		to := r.URL.Query().Get("to")
+		path, found, err := g.ShortestPath(from, to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(pathResponse{Path: path, Found: found})
+	})
+
+	mux.HandleFunc("GET /graph/orphans", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(orphansResponse{Orphans: g.Orphans()})
 	})
 
 	return mux
