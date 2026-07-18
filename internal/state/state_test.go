@@ -6,10 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sengkong/knowledge-server/internal/graph"
+	"github.com/sengkong/knowledge-server/internal/engines"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
-	"github.com/sengkong/knowledge-server/internal/search"
 	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/internal/vaultfixture"
 )
@@ -19,20 +18,12 @@ func buildState(t *testing.T, root string) (*State, vault.VaultProvider, notes.N
 	provider := vault.NewLocalVaultProvider(root)
 	store := notes.NewVaultNoteStore(provider)
 
-	idx, _, err := index.Build(provider, store)
+	e, _, err := engines.Build(provider, store)
 	if err != nil {
-		t.Fatalf("index.Build: %v", err)
-	}
-	ss, _, err := search.Build(provider, store)
-	if err != nil {
-		t.Fatalf("search.Build: %v", err)
-	}
-	g, _, err := graph.Build(provider, store)
-	if err != nil {
-		t.Fatalf("graph.Build: %v", err)
+		t.Fatalf("engines.Build: %v", err)
 	}
 
-	return New(idx, ss, g), provider, store
+	return New(e), provider, store
 }
 
 func TestUpsert_UpdatesIndex(t *testing.T) {
@@ -210,15 +201,17 @@ func TestSave_PersistsAllThreeUnderLock(t *testing.T) {
 	s, provider, store := buildState(t, root)
 
 	cacheDir := t.TempDir()
-	indexPath := cacheDir + "/index.gob"
-	searchPath := cacheDir + "/search.gob"
-	graphPath := cacheDir + "/graph.gob"
+	paths := engines.Paths{
+		Index:  cacheDir + "/index.gob",
+		Search: cacheDir + "/search.gob",
+		Graph:  cacheDir + "/graph.gob",
+	}
 
-	if err := s.Save(indexPath, searchPath, graphPath); err != nil {
+	if err := s.Save(paths); err != nil {
 		t.Fatalf("Save returned error: %v", err)
 	}
 
-	loadedIdx, err := index.Load(indexPath, provider, store)
+	loadedIdx, err := index.Load(paths.Index, provider, store)
 	if err != nil {
 		t.Fatalf("index.Load returned error: %v", err)
 	}

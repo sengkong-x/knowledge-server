@@ -9,10 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sengkong/knowledge-server/internal/graph"
-	"github.com/sengkong/knowledge-server/internal/index"
+	"github.com/sengkong/knowledge-server/internal/engines"
 	"github.com/sengkong/knowledge-server/internal/notes"
-	"github.com/sengkong/knowledge-server/internal/search"
 	"github.com/sengkong/knowledge-server/internal/state"
 	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/internal/vaultfixture"
@@ -29,20 +27,12 @@ func newTestHandlerWithState(t *testing.T, root string) (http.Handler, *state.St
 	provider := vault.NewLocalVaultProvider(root)
 	store := notes.NewVaultNoteStore(provider)
 
-	idx, _, err := index.Build(provider, store)
+	e, _, err := engines.Build(provider, store)
 	if err != nil {
-		t.Fatalf("index.Build returned error: %v", err)
-	}
-	ss, _, err := search.Build(provider, store)
-	if err != nil {
-		t.Fatalf("search.Build returned error: %v", err)
-	}
-	g, _, err := graph.Build(provider, store)
-	if err != nil {
-		t.Fatalf("graph.Build returned error: %v", err)
+		t.Fatalf("engines.Build returned error: %v", err)
 	}
 
-	s := state.New(idx, ss, g)
+	s := state.New(e)
 	return New(root, provider, store, s, "light"), s
 }
 
@@ -688,20 +678,12 @@ func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
 	}}
 
 	store := notes.NewVaultNoteStore(provider)
-	idx, _, err := index.Build(provider, store)
+	e, _, err := engines.Build(provider, store)
 	if err != nil {
-		t.Fatalf("index.Build returned error: %v", err)
-	}
-	ss, _, err := search.Build(provider, store)
-	if err != nil {
-		t.Fatalf("search.Build returned error: %v", err)
-	}
-	g, _, err := graph.Build(provider, store)
-	if err != nil {
-		t.Fatalf("graph.Build returned error: %v", err)
+		t.Fatalf("engines.Build returned error: %v", err)
 	}
 
-	handler := New("/srv/knowledge", provider, store, state.New(idx, ss, g), "light")
+	handler := New("/srv/knowledge", provider, store, state.New(e), "light")
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()

@@ -11,11 +11,9 @@ import (
 	"syscall"
 
 	"github.com/sengkong/knowledge-server/internal/config"
-	"github.com/sengkong/knowledge-server/internal/graph"
-	"github.com/sengkong/knowledge-server/internal/index"
+	"github.com/sengkong/knowledge-server/internal/engines"
 	"github.com/sengkong/knowledge-server/internal/logger"
 	"github.com/sengkong/knowledge-server/internal/notes"
-	"github.com/sengkong/knowledge-server/internal/search"
 	"github.com/sengkong/knowledge-server/internal/server"
 	"github.com/sengkong/knowledge-server/internal/state"
 	"github.com/sengkong/knowledge-server/internal/vault"
@@ -51,38 +49,28 @@ func main() {
 		log.Error("creating cache dir", "path", cacheDir, "error", err)
 		os.Exit(1)
 	}
-	indexCachePath := filepath.Join(cacheDir, "index.gob")
-	searchCachePath := filepath.Join(cacheDir, "search.gob")
-	graphCachePath := filepath.Join(cacheDir, "graph.gob")
+	cachePaths := engines.Paths{
+		Index:  filepath.Join(cacheDir, "index.gob"),
+		Search: filepath.Join(cacheDir, "search.gob"),
+		Graph:  filepath.Join(cacheDir, "graph.gob"),
+	}
 
-	idx, idxReport, err := index.LoadOrBuild(indexCachePath, provider, store)
+	e, report, err := engines.LoadOrBuild(cachePaths, provider, store)
 	if err != nil {
-		log.Error("loading or building index", "error", err)
+		log.Error("loading or building engines", "error", err)
 		os.Exit(1)
 	}
-	for id, parseErr := range idxReport.Failed {
+	for id, parseErr := range report.Index.Failed {
 		log.Warn("note failed to index", "id", id, "error", parseErr)
 	}
-
-	ss, ssReport, err := search.LoadOrBuild(searchCachePath, provider, store)
-	if err != nil {
-		log.Error("loading or building search store", "error", err)
-		os.Exit(1)
-	}
-	for id, parseErr := range ssReport.Failed {
+	for id, parseErr := range report.Search.Failed {
 		log.Warn("note failed to index for search", "id", id, "error", parseErr)
 	}
-
-	g, gReport, err := graph.LoadOrBuild(graphCachePath, provider, store)
-	if err != nil {
-		log.Error("loading or building graph", "error", err)
-		os.Exit(1)
-	}
-	for id, buildErr := range gReport.Failed {
+	for id, buildErr := range report.Graph.Failed {
 		log.Warn("note failed to graph", "id", id, "error", buildErr)
 	}
 
-	knowledge := state.New(idx, ss, g)
+	knowledge := state.New(e)
 
 	w, err := watcher.New(cfg.Vault.Path, knowledge)
 	if err != nil {
@@ -116,7 +104,7 @@ func main() {
 	if err := w.Close(); err != nil {
 		log.Warn("closing watcher", "error", err)
 	}
-	if err := knowledge.Save(indexCachePath, searchCachePath, graphCachePath); err != nil {
+	if err := knowledge.Save(cachePaths); err != nil {
 		log.Warn("saving cache", "error", err)
 	}
 

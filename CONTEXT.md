@@ -44,6 +44,10 @@ _Avoid_: Backlinks (implies directionality this graph doesn't have), LinkGraph
 A single Graph node: a Note's ID and its resolved set of neighbor IDs. `related` entries that don't resolve to an existing Note ID are dropped when building edges (not represented as phantom nodes) and reported in the graph's `BuildReport`, mirroring `index.BuildReport`. Self-references and duplicate `related` entries are silently normalized to no-ops.
 _Avoid_: Node (too generic outside the graph package itself), GraphNode
 
+**Engines**:
+`Index`, `SearchStore`, and `Graph` managed as one unit — constructed together from the Vault, fanned out to together on every note change, and persisted together. Lives in `internal/engines`. Owns no concurrency: it's used single-threaded, guarded by `State` (see ADR-0008). A failure in one engine during an update or a save doesn't stop the others from being attempted.
+_Avoid_: Triad, State (that's the concurrency-guarding layer above Engines, not the triad itself)
+
 **Watcher**:
 Monitors the Vault for filesystem changes and drives incremental `Upsert`/`Remove` calls into `Index`, `SearchStore`, and `Graph` so they stay current without a full rebuild or a server restart. Lives in `internal/watcher`. Reacts only to Note files; asset changes don't affect any of the three engines and are ignored.
 _Avoid_: Poller (the mechanism is event-driven, not polling), File watcher (redundant with Vault-scoping already implied)
