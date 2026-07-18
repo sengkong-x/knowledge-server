@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 620" width="980" height="620" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333333"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="620" fill="#fafafa"/>
+  <text x="490" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#111111">Container Diagram — Knowledge Server</text>
+
+  <!-- Person / Browser -->
+  <rect x="30" y="70" width="180" height="90" rx="10" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="120" y="105" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">Person</text>
+  <text x="120" y="125" text-anchor="middle" font-size="11" fill="#333333">Browser (HTMX,</text>
+  <text x="120" y="140" text-anchor="middle" font-size="11" fill="#333333">SSE via /events)</text>
+
+  <!-- Outer container boundary: Knowledge Server process -->
+  <rect x="260" y="55" width="670" height="330" rx="12" fill="none" stroke="#999999" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="595" y="78" text-anchor="middle" font-size="13" fill="#666666">Knowledge Server (single Go process)</text>
+
+  <!-- HTTP / Web Server -->
+  <rect x="290" y="100" width="230" height="110" rx="10" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="405" y="130" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">HTTP / Web Server</text>
+  <text x="405" y="150" text-anchor="middle" font-size="11" fill="#333333">Go net/http.ServeMux</text>
+  <text x="405" y="166" text-anchor="middle" font-size="11" fill="#333333">server-rendered HTML,</text>
+  <text x="405" y="182" text-anchor="middle" font-size="11" fill="#333333">JSON API, SSE stream</text>
+  <text x="405" y="198" text-anchor="middle" font-size="10" fill="#555555">(ADR-0002, ADR-0009)</text>
+
+  <!-- State -->
+  <rect x="590" y="100" width="230" height="110" rx="10" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="705" y="130" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">State</text>
+  <text x="705" y="150" text-anchor="middle" font-size="11" fill="#333333">In-memory process state.</text>
+  <text x="705" y="166" text-anchor="middle" font-size="11" fill="#333333">Mutex-guards the Engines</text>
+  <text x="705" y="182" text-anchor="middle" font-size="11" fill="#333333">(Index/SearchStore/Graph)</text>
+  <text x="705" y="198" text-anchor="middle" font-size="10" fill="#555555">(ADR-0008)</text>
+
+  <!-- Watcher -->
+  <rect x="440" y="270" width="230" height="90" rx="10" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="555" y="298" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">Watcher</text>
+  <text x="555" y="318" text-anchor="middle" font-size="11" fill="#333333">fsnotify-driven, debounced</text>
+  <text x="555" y="334" text-anchor="middle" font-size="11" fill="#333333">file-change detection</text>
+  <text x="555" y="350" text-anchor="middle" font-size="10" fill="#555555">(ADR-0007)</text>
+
+  <!-- Vault (disk) -->
+  <rect x="30" y="440" width="220" height="120" rx="10" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="140" y="475" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">Vault (disk)</text>
+  <text x="140" y="497" text-anchor="middle" font-size="11" fill="#333333">Markdown notes +</text>
+  <text x="140" y="513" text-anchor="middle" font-size="11" fill="#333333">assets. Sole source</text>
+  <text x="140" y="529" text-anchor="middle" font-size="11" fill="#333333">of truth.</text>
+
+  <!-- Cache (disk) -->
+  <rect x="720" y="440" width="230" height="120" rx="10" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="835" y="475" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">Cache (disk)</text>
+  <text x="835" y="497" text-anchor="middle" font-size="11" fill="#333333">.cache/*.gob — Index,</text>
+  <text x="835" y="513" text-anchor="middle" font-size="11" fill="#333333">Search, Graph snapshots</text>
+  <text x="835" y="529" text-anchor="middle" font-size="10" fill="#555555">(ADR-0004, ADR-0010)</text>
+
+  <!-- Arrows -->
+  <line x1="210" y1="130" x2="285" y2="130" stroke="#333333" stroke-width="2" marker-end="url(#arrow2)"/>
+  <text x="248" y="118" text-anchor="middle" font-size="10" fill="#111111">HTTP</text>
+
+  <line x1="520" y1="155" x2="585" y2="155" stroke="#333333" stroke-width="2" marker-end="url(#arrow2)"/>
+  <text x="553" y="143" text-anchor="middle" font-size="10" fill="#111111">reads</text>
+
+  <line x1="405" y1="210" x2="140" y2="435" stroke="#333333" stroke-width="2" marker-end="url(#arrow2)"/>
+  <text x="255" y="330" text-anchor="middle" font-size="10" fill="#111111">reads notes / assets</text>
+  <text x="255" y="344" text-anchor="middle" font-size="10" fill="#111111">(VaultProvider, NoteStore)</text>
+
+  <line x1="555" y1="270" x2="555" y2="215" stroke="#333333" stroke-width="2" marker-end="url(#arrow2)"/>
+  <text x="565" y="245" text-anchor="start" font-size="10" fill="#111111">Upsert / Remove</text>
+
+  <line x1="440" y1="315" x2="150" y2="440" stroke="#333333" stroke-width="2" marker-end="url(#arrow2)"/>
+  <text x="290" y="400" text-anchor="middle" font-size="10" fill="#111111">watches (fsnotify)</text>
+
+  <line x1="705" y1="210" x2="835" y2="435" stroke="#333333" stroke-width="2" marker-end="url(#arrow2)"/>
+  <text x="810" y="330" text-anchor="middle" font-size="10" fill="#111111">LoadOrBuild (startup)</text>
+  <text x="810" y="344" text-anchor="middle" font-size="10" fill="#111111">Save (graceful shutdown)</text>
+
+  <path d="M 405 100 C 320 60, 210 60, 130 95" fill="none" stroke="#888888" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow2)"/>
+  <text x="270" y="55" text-anchor="middle" font-size="10" fill="#555555">SSE push (/events) on Vault change — browser re-fetches via HTMX</text>
+
+</svg>

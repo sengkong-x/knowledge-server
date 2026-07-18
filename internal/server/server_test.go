@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -436,6 +437,106 @@ Body.
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestAssets_ServesVaultRelativeFile(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "diagrams/thing.svg", `<svg></svg>`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/diagrams/thing.svg", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != `<svg></svg>` {
+		t.Errorf("body = %q, want the raw asset bytes", rec.Body.String())
+	}
+}
+
+// Mirrors docs/architecture.md's real setup: a single-path-segment note
+// (ID "architecture", no slashes) embedding an image via a "../assets/..."
+// relative path. This proves that path actually resolves end-to-end through
+// a browser's relative-URL rules — /notes/architecture + "../assets/x.svg"
+// -> /assets/x.svg -- not just that each route works in isolation.
+func TestNoteDetail_RelativeImagePathResolvesThroughAssetsRoute(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "architecture.md", `---
+title: Architecture
+created: 2026-07-18
+---
+![diagram](../assets/diagrams/thing.svg)
+`)
+	vaultfixture.WriteNote(t, root, "diagrams/thing.svg", `<svg></svg>`)
+
+	handler := newTestHandler(t, root)
+
+	noteReq := httptest.NewRequest(http.MethodGet, "/notes/architecture", nil)
+	noteRec := httptest.NewRecorder()
+	handler.ServeHTTP(noteRec, noteReq)
+
+	const wantSrc = `src="../assets/diagrams/thing.svg"`
+	if !strings.Contains(noteRec.Body.String(), wantSrc) {
+		t.Fatalf("note body = %q, want it to contain %q", noteRec.Body.String(), wantSrc)
+	}
+
+	resolved, err := url.Parse("/notes/architecture")
+	if err != nil {
+		t.Fatalf("parsing base URL: %v", err)
+	}
+	imgURL, err := url.Parse("../assets/diagrams/thing.svg")
+	if err != nil {
+		t.Fatalf("parsing image URL: %v", err)
+	}
+	assetPath := resolved.ResolveReference(imgURL).Path
+	if assetPath != "/assets/diagrams/thing.svg" {
+		t.Fatalf("resolved asset path = %q, want %q", assetPath, "/assets/diagrams/thing.svg")
+	}
+
+	assetReq := httptest.NewRequest(http.MethodGet, assetPath, nil)
+	assetRec := httptest.NewRecorder()
+	handler.ServeHTTP(assetRec, assetReq)
+
+	if assetRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", assetRec.Code, http.StatusOK)
+	}
+	if assetRec.Body.String() != `<svg></svg>` {
+		t.Errorf("body = %q, want the raw asset bytes", assetRec.Body.String())
+	}
+}
+
+func TestAssets_ReturnsNotFoundForMissingFile(t *testing.T) {
+	root := t.TempDir()
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/does-not-exist.svg", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// A ".." in the request path never reaches the handler at all: net/http's
+// ServeMux redirects it to the cleaned equivalent first (see net/http docs).
+// VaultProvider.ReadAsset's own traversal guard is covered directly in
+// internal/vault's tests, since that's the layer that owns the invariant.
+func TestAssets_DirtyPathIsRedirectedByServeMuxBeforeReachingHandler(t *testing.T) {
+	root := t.TempDir()
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/../server.go", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d (ServeMux's redirect for a dirty path)", rec.Code, http.StatusTemporaryRedirect)
 	}
 }
 

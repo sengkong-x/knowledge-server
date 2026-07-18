@@ -1,3 +1,7 @@
-# Split VaultProvider (filesystem) from NoteStore (parsed notes)
+---
+title: Split VaultProvider (filesystem) from NoteStore (parsed notes)
+created: 2026-07-12
+tags: [adr]
+---
 
 Ticket 01 needed to define both a filesystem abstraction over the Vault and a note-level interface, but the parser that turns raw Markdown into a `Note` doesn't exist until the Knowledge Reader phase (ticket 02). We decided to split these into two interfaces instead of one: `VaultProvider` (raw bytes in/out — `ListNotes`, `ReadNote`, `ReadAsset` — fully implemented now) and `NoteStore` (`List`, `Load` returning parsed `Note` values — declared now, implemented in ticket 02). This keeps `VaultProvider` free of any Markdown/YAML knowledge, so it stays cleanly swappable for Git/S3/remote backends later, and avoids pulling parsing logic into the foundation ticket ahead of schedule.

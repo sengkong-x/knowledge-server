@@ -1,4 +1,8 @@
-# Server-Sent Events with a generic ping for live UI updates
+---
+title: Server-Sent Events with a generic ping for live UI updates
+created: 2026-07-18
+tags: [adr]
+---
 
 The web renderer needs to reflect Vault edits without a page refresh. We considered HTMX polling (fixed-interval re-fetch, simple but with detection lag and constant background traffic), a full-reload signal (simplest, but loses scroll/search/graph pan-zoom state on every edit), and Server-Sent Events. We chose SSE at `GET /events`: it's one-directional (the browser never needs to push back, so a websocket would be more mechanism than the problem needs), HTMX has established SSE support, and it pushes near-instantly instead of on a poll timer. In the implementation we used the browser's native `EventSource` plus `htmx.ajax` for the actual re-fetch, rather than the `htmx-ext-sse` extension — the extension's `sse-swap` model swaps the raw SSE payload straight into the DOM, which doesn't fit a payload-less "something changed" ping (see below); a few lines of vanilla JS achieved the same generic-ping behavior without vendoring an extra script.
 

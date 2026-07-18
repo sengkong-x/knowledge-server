@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
@@ -240,6 +241,23 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 				flusher.Flush()
 			}
 		}
+	})
+
+	mux.HandleFunc("GET /assets/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		// No path-traversal guard needed here: ServeMux itself redirects any
+		// request path containing ".." to its cleaned equivalent before a
+		// handler ever runs (see net/http's ServeMux docs), and
+		// VaultProvider.ReadAsset rejects any escape of the Vault root on
+		// its own behalf, since it's the abstraction that owns filesystem
+		// safety, not this transport-layer handler.
+		reqPath := r.PathValue("path")
+
+		data, err := provider.ReadAsset(reqPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.ServeContent(w, r, reqPath, time.Time{}, bytes.NewReader(data))
 	})
 
 	mux.HandleFunc("GET /notes/{id...}", func(w http.ResponseWriter, r *http.Request) {

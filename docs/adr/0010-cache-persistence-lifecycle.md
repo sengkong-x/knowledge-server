@@ -1,4 +1,8 @@
-# Load cache at startup, save only on graceful shutdown
+---
+title: Load cache at startup, save only on graceful shutdown
+created: 2026-07-18
+tags: [adr]
+---
 
 `Index`, `SearchStore`, and `Graph` have had `Save`/`Load` persistence (ADR-0004's gob encoding) since Ticket 03/04/05, but `cmd/main.go` has never called them — every startup does a full `Build()` from the Vault. Ticket 06 makes the server long-running with continuous Watcher-driven mutation, which makes startup cost worth addressing. We considered leaving persistence unwired (startup cost is orthogonal to live-editing UX) against wiring it up now, and chose to wire it up: the APIs already exist and sit unused, and a long-running server restarting after a deploy or crash is exactly the scenario they were built for.
 

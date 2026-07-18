@@ -1,3 +1,4 @@
 .claude/settings.local.json
-config.yaml
+/config.yaml
 ks
+.cache/
