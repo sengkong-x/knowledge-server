@@ -1,0 +1,6 @@
+:root[data-theme="dark"] {
+  --bg: #1a1a1a;
+  --fg: #e6e6e6;
+  --link: #6ea8ff;
+  --border: #3a3a3a;
+}

@@ -413,3 +413,97 @@ B body.
 		t.Fatalf("Neighbors(a) after Load = %v, want [b]", got)
 	}
 }
+
+func TestLoadOrBuild_LoadsFromCacheWhenPresent(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	g, _, provider, store := buildGraph(t, root)
+	cachePath := filepath.Join(t.TempDir(), "graph.gob")
+	if err := g.Save(cachePath); err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	vaultfixture.WriteNote(t, root, "c.md", `---
+title: C
+created: 2026-07-12
+---
+C body.
+`)
+
+	loaded, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+
+	if len(loaded.All()) != 2 {
+		t.Fatalf("All() = %+v, want LoadOrBuild to have used the stale cache (2 nodes), not rebuilt", loaded.All())
+	}
+}
+
+func TestLoadOrBuild_FallsBackToBuildWhenCacheMissing(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+created: 2026-07-12
+---
+A body.
+`)
+
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+	cachePath := filepath.Join(t.TempDir(), "does-not-exist.gob")
+
+	g, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+
+	if len(g.All()) != 1 {
+		t.Fatalf("All() = %+v, want a fresh Build from the vault", g.All())
+	}
+}
+
+func TestAll_ReturnsEveryNode(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", `---
+title: Process
+related: [linux/memory]
+created: 2026-07-12
+---
+Body text.
+`)
+	vaultfixture.WriteNote(t, root, "linux/memory.md", `---
+title: Memory
+created: 2026-07-13
+---
+Memory body.
+`)
+
+	g, _, _, _ := buildGraph(t, root)
+
+	got := g.All()
+	if len(got) != 2 {
+		t.Fatalf("All() returned %d entries, want 2: %+v", len(got), got)
+	}
+
+	ids := map[string]bool{}
+	for _, entry := range got {
+		ids[entry.ID] = true
+	}
+	if !ids["linux/process"] || !ids["linux/memory"] {
+		t.Errorf("All() = %+v, want entries for linux/process and linux/memory", got)
+	}
+}

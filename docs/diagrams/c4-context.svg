@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333333"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="900" height="420" fill="#fafafa"/>
+
+  <text x="450" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#111111">System Context</text>
+
+  <!-- Person -->
+  <rect x="40" y="150" width="220" height="120" rx="10" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="150" y="200" text-anchor="middle" font-size="16" font-weight="bold" fill="#111111">Person</text>
+  <text x="150" y="222" text-anchor="middle" font-size="12" fill="#333333">Manages their own</text>
+  <text x="150" y="238" text-anchor="middle" font-size="12" fill="#333333">personal knowledge</text>
+  <text x="150" y="254" text-anchor="middle" font-size="12" fill="#333333">(notes, tags, links)</text>
+
+  <!-- Knowledge Server -->
+  <rect x="340" y="130" width="240" height="160" rx="10" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="460" y="185" text-anchor="middle" font-size="17" font-weight="bold" fill="#111111">Knowledge Server</text>
+  <text x="460" y="208" text-anchor="middle" font-size="12" fill="#333333">Self-hosted Go binary:</text>
+  <text x="460" y="226" text-anchor="middle" font-size="12" fill="#333333">reads, indexes, searches,</text>
+  <text x="460" y="244" text-anchor="middle" font-size="12" fill="#333333">and links Markdown notes</text>
+  <text x="460" y="262" text-anchor="middle" font-size="12" fill="#333333">via a browser UI</text>
+
+  <!-- Vault -->
+  <rect x="660" y="150" width="200" height="120" rx="10" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="760" y="200" text-anchor="middle" font-size="16" font-weight="bold" fill="#111111">Vault</text>
+  <text x="760" y="222" text-anchor="middle" font-size="12" fill="#333333">Directory of plain</text>
+  <text x="760" y="238" text-anchor="middle" font-size="12" fill="#333333">Markdown notes on disk</text>
+  <text x="760" y="254" text-anchor="middle" font-size="12" fill="#333333">(sole source of truth)</text>
+
+  <!-- Arrows -->
+  <line x1="260" y1="210" x2="335" y2="210" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="298" y="200" text-anchor="middle" font-size="11" fill="#111111">browses / edits via HTTP</text>
+
+  <line x1="580" y1="210" x2="655" y2="210" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="618" y="200" text-anchor="middle" font-size="11" fill="#111111">reads /</text>
+  <text x="618" y="235" text-anchor="middle" font-size="11" fill="#111111">watches</text>
+
+  <text x="450" y="350" text-anchor="middle" font-size="12" fill="#555555">The person edits Notes directly on disk (their own editor) or through the server's web UI;</text>
+  <text x="450" y="368" text-anchor="middle" font-size="12" fill="#555555">Knowledge Server continuously reflects the Vault's current state back to the browser.</text>
+</svg>

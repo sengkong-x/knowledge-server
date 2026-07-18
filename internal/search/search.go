@@ -77,6 +77,16 @@ type SearchStore struct {
 	store    notes.NoteStore
 }
 
+// LoadOrBuild loads the SearchStore from path if present, falling back to a
+// full Build from the Vault if the cache is missing or fails to decode (see
+// ADR-0010).
+func LoadOrBuild(path string, provider vault.VaultProvider, store notes.NoteStore) (*SearchStore, BuildReport, error) {
+	if ss, err := Load(path, provider, store); err == nil {
+		return ss, BuildReport{Failed: make(map[string]error)}, nil
+	}
+	return Build(provider, store)
+}
+
 // BuildReport records notes that failed to parse during a Build.
 type BuildReport struct {
 	Failed map[string]error

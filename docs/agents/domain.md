@@ -1,4 +1,8 @@
-# Domain Docs
+---
+title: Domain Docs
+created: 2026-07-12
+tags: [agent-docs]
+---
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 

@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 760" width="1000" height="760" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333333"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="760" fill="#fafafa"/>
+  <text x="500" y="32" text-anchor="middle" font-size="20" font-weight="bold" fill="#111111">Component Diagram — internal/ packages</text>
+  <text x="500" y="52" text-anchor="middle" font-size="12" fill="#555555">Arrows point from dependent to dependency (import direction)</text>
+
+  <!-- server -->
+  <rect x="400" y="70" width="200" height="60" rx="8" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="500" y="105" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">server</text>
+
+  <!-- watcher -->
+  <rect x="150" y="70" width="180" height="60" rx="8" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="240" y="105" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">watcher</text>
+
+  <!-- state -->
+  <rect x="410" y="190" width="180" height="60" rx="8" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="500" y="225" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">state</text>
+
+  <!-- engines -->
+  <rect x="410" y="310" width="180" height="60" rx="8" fill="#eeeeee" stroke="#111111" stroke-width="2.5"/>
+  <text x="500" y="345" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">engines</text>
+
+  <!-- index / search / graph -->
+  <rect x="140" y="430" width="180" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="230" y="465" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">index</text>
+
+  <rect x="410" y="430" width="180" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="500" y="465" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">search</text>
+
+  <rect x="680" y="430" width="180" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="770" y="465" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">graph</text>
+
+  <!-- notes -->
+  <rect x="410" y="550" width="180" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="500" y="585" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">notes</text>
+
+  <!-- vault -->
+  <rect x="180" y="670" width="180" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="270" y="705" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">vault</text>
+
+  <!-- parser -->
+  <rect x="640" y="670" width="180" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="730" y="705" text-anchor="middle" font-size="14" font-weight="bold" fill="#111111">parser</text>
+
+  <!-- config (utility, standalone) -->
+  <rect x="820" y="70" width="150" height="60" rx="8" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+  <text x="895" y="105" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">config</text>
+  <text x="895" y="122" text-anchor="middle" font-size="9" fill="#555555">(used by cmd/main only)</text>
+
+  <!-- Arrows -->
+  <!-- server -> state -->
+  <line x1="500" y1="130" x2="500" y2="185" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <!-- server -> notes (curve) -->
+  <path d="M 460 130 C 430 300, 460 480, 480 545" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <!-- server -> vault (curve) -->
+  <path d="M 400 110 C 250 200, 220 450, 255 665" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- watcher -> state -->
+  <path d="M 300 110 C 380 160, 400 175, 415 195" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- state -> engines -->
+  <line x1="500" y1="250" x2="500" y2="305" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- engines -> index/search/graph -->
+  <path d="M 440 370 C 350 400, 280 415, 250 428" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <line x1="500" y1="370" x2="500" y2="425" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <path d="M 560 370 C 650 400, 720 415, 750 428" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- index -> notes -->
+  <path d="M 260 490 C 320 520, 400 540, 415 555" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <!-- search -> notes -->
+  <line x1="500" y1="490" x2="500" y2="545" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <!-- graph -> notes -->
+  <path d="M 740 490 C 680 520, 600 540, 585 555" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <!-- index -> vault (direct, ResolvePath) -->
+  <path d="M 190 490 C 180 550, 220 620, 255 665" fill="none" stroke="#888888" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow3)"/>
+  <!-- search -> vault (direct, ResolvePath) -->
+  <path d="M 440 490 C 350 560, 300 620, 280 665" fill="none" stroke="#888888" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow3)"/>
+  <!-- graph -> vault (direct, ListNotes on Build) -->
+  <path d="M 700 490 C 500 610, 350 650, 300 675" fill="none" stroke="#888888" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow3)"/>
+
+  <!-- notes -> vault -->
+  <path d="M 420 605 C 350 640, 300 655, 280 668" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+  <!-- notes -> parser -->
+  <path d="M 580 605 C 640 630, 690 655, 715 668" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow3)"/>
+
+  <text x="500" y="740" text-anchor="middle" font-size="11" fill="#555555">Solid arrows: primary layering (vault → notes → parser; notes → index/search/graph → engines → state; watcher → state; server → state/notes/vault).</text>
+  <text x="500" y="755" text-anchor="middle" font-size="11" fill="#555555">Dashed arrows: secondary direct calls (index/search/graph → vault for path resolution / listing, via ADR-0001's VaultProvider).</text>
+</svg>

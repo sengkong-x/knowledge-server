@@ -1,4 +1,8 @@
-# Issue tracker: Local Markdown
+---
+title: "Issue tracker: Local Markdown"
+created: 2026-07-12
+tags: [agent-docs]
+---
 
 Issues and specs (you may know a spec as a PRD) for this repo live as markdown files in `.scratch/`.
 

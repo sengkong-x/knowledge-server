@@ -62,8 +62,26 @@ func (p *localVaultProvider) ReadNote(id string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// ReadAsset serves arbitrary Vault-relative files (e.g. images referenced
+// from a note's body), so unlike ReadNote (whose id always comes from a
+// ListNotes-derived NoteRef) path here may be attacker-controlled directly
+// from an HTTP route — it's sanitized against escaping root before use.
 func (p *localVaultProvider) ReadAsset(path string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(p.root, filepath.FromSlash(path)))
+	full, err := safeJoin(p.root, path)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(full)
+}
+
+// safeJoin joins root and rel, rejecting any rel that would resolve outside
+// root (e.g. via ".." segments).
+func safeJoin(root, rel string) (string, error) {
+	full := filepath.Join(root, filepath.FromSlash(rel))
+	if full != root && !strings.HasPrefix(full, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes vault root", rel)
+	}
+	return full, nil
 }
 
 // ResolvePath returns existingPath if non-empty, otherwise resolves id's

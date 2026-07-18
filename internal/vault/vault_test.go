@@ -83,6 +83,21 @@ func TestReadAsset_ReturnsFileContentsByRelativePath(t *testing.T) {
 	}
 }
 
+func TestReadAsset_RejectsPathEscapingRoot(t *testing.T) {
+	outside := t.TempDir()
+	writeFile(t, outside, "secret.txt", "outside the vault")
+
+	root := filepath.Join(outside, "vault")
+	writeFile(t, root, "assets/diagram.png", "fake-png-bytes")
+
+	provider := NewLocalVaultProvider(root)
+
+	_, err := provider.ReadAsset("../secret.txt")
+	if err == nil {
+		t.Fatal("ReadAsset(\"../secret.txt\") returned no error, want it rejected for escaping the vault root")
+	}
+}
+
 func TestValidateRoot_ErrorsWhenPathDoesNotExist(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "does-not-exist")
 

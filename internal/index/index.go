@@ -96,6 +96,15 @@ func (idx *Index) Remove(id string) {
 	delete(idx.entries, id)
 }
 
+// All returns every entry in the Index.
+func (idx *Index) All() []IndexEntry {
+	entries := make([]IndexEntry, 0, len(idx.entries))
+	for _, entry := range idx.entries {
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
 // ByTag returns every entry that has tag among its Tags.
 func (idx *Index) ByTag(tag string) []IndexEntry {
 	var matches []IndexEntry
@@ -105,6 +114,16 @@ func (idx *Index) ByTag(tag string) []IndexEntry {
 		}
 	}
 	return matches
+}
+
+// LoadOrBuild loads the Index from path if present, falling back to a full
+// Build from the Vault if the cache is missing or fails to decode (see
+// ADR-0010).
+func LoadOrBuild(path string, provider vault.VaultProvider, store notes.NoteStore) (*Index, BuildReport, error) {
+	if idx, err := Load(path, provider, store); err == nil {
+		return idx, BuildReport{Failed: make(map[string]error)}, nil
+	}
+	return Build(provider, store)
 }
 
 // BuildReport records notes that failed to parse during a Build.

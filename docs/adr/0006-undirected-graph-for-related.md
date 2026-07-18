@@ -1,4 +1,8 @@
-# Undirected edges for `related`-based graph
+---
+title: Undirected edges for `related`-based graph
+created: 2026-07-18
+tags: [adr]
+---
 
 `internal/graph` builds a relationship graph from each Note's `related` frontmatter field. We considered treating `related` as a directed edge (A → B when A lists B, distinguishing "forward links" from "backlinks" the way many note-taking tools do) against treating it as declaring a single undirected edge between A and B. We chose undirected: a vault author writing `related: [B]` on note A means "A and B are connected," not "A points to B," and there's no forward/backlink distinction anywhere else in the ticket's query surface (neighbors, shortest path, orphan detection all read naturally as undirected graph operations). Undirected edges also make orphan detection well-defined with no extra rule: a note is an orphan iff it has zero edges after symmetrizing, regardless of which side declared the `related` entry.
 

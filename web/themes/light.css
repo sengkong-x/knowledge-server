@@ -1,0 +1,6 @@
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --link: #0b5fff;
+  --border: #d9d9d9;
+}

@@ -27,7 +27,7 @@ vault:
 server:
   port: 8080
 theme:
-  default: dark       # reserved for the renderer (Phase 5+); unused by the server today
+  default: dark       # light or dark; drives which CSS file the renderer links
 ```
 
 `vault.path` supports a leading `~` for the home directory. The server fails fast at startup if `vault.path` doesn't exist or isn't a directory.
@@ -51,36 +51,34 @@ go test ./...
 
 ## Project layout
 
-Current (Phase 0 — Foundation & Architecture):
-
 ```
-cmd/            entry point — wires config, vault, and server; no business logic
+cmd/            entry point — wires config, vault, engines, watcher, and server; no business logic
 internal/
   config/       config.yaml loading
   vault/        VaultProvider — filesystem access to the Vault
-  parser/       Note / NoteStore types (implementation lands in a later phase)
+  parser/       pure Markdown/frontmatter parsing into a Note
+  notes/        NoteStore — VaultProvider + parser composed into parsed Note access
+  index/        Index — ID/tag lookup over Vault metadata
+  search/       SearchStore — full-text substring search over Vault content
+  graph/        Graph — undirected relationship graph from notes' `related` field
+  engines/      Index + SearchStore + Graph managed together as one unit
+  state/        concurrency-safe wrapper around Engines, plus SSE subscribers
+  watcher/      fsnotify-driven incremental updates into State
   server/       HTTP layer (stdlib net/http.ServeMux only, see docs/adr/0002)
   logger/       slog setup
-web/            frontend assets (future)
+web/            vendored frontend assets (HTMX, Alpine.js, Cytoscape.js, theme CSS)
+docs/           architecture doc, ADRs, and (see below) a second Vault for viewing them
 ```
 
-The target layout adds one `internal/` package per engine as its phase lands — `markdown`, `index`, `metadata`, `search`, `graph`, `cache`, `watcher`, `api` — each introduced only when its ticket does, not scaffolded ahead of time.
+See `docs/architecture.md` for a full walkthrough (C4 diagrams, request lifecycle, persistence), `CONTEXT.md` for domain vocabulary, and `docs/adr/` for individual architectural decisions.
 
-## Roadmap
+## Viewing the documentation through `./ks`
 
-Each phase is one ticket under `.scratch/knowledge-server/issues/`, built sequentially:
+The files under `docs/` (the architecture doc and every ADR) are themselves valid Notes — each carries the `title`/`created` frontmatter the parser requires — so `docs/` doubles as a second Vault. `docs/config.yaml` points at it:
 
-| # | Phase | Ticket |
-|---|-------|--------|
-| 0 | Foundation & Architecture | ✅ done |
-| 1 | Knowledge Reader | parser + `NoteStore` implementation |
-| 2 | Knowledge Indexing | |
-| 3 | Search Engine | |
-| 4 | Knowledge Graph | |
-| 5 | Productivity Experience | web renderer |
-| 6 | AI Integration | AI context API |
-| 7 | Interactive Knowledge | |
+```sh
+go build -o ks ./cmd
+./ks --config ./docs/config.yaml
+```
 
-Backlog (unticketed): semantic search / embeddings, knowledge gap detection, generated learning roadmaps, plugin system. See `.scratch/knowledge-server/spec.md` for the full spec and rationale.
-
-See `CONTEXT.md` for domain vocabulary and `docs/adr/` for architectural decisions.
+This starts a second instance, browsable, searchable, and graph-viewable exactly like your real Vault, on its own port so it can run alongside your normal `./ks --config ./config.yaml` instance. `docs/config.yaml` is checked into the repo (unlike the root `config.yaml`, which is gitignored since it points at your personal Vault) — it ships with the project so this works right after cloning.
