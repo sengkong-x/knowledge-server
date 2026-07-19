@@ -1,7 +1,11 @@
 package index
 
 import (
+	"bufio"
 	"encoding/gob"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"slices"
 	"time"
@@ -10,6 +14,30 @@ import (
 	"github.com/sengkong/knowledge-server/internal/parser"
 	"github.com/sengkong/knowledge-server/internal/vault"
 )
+
+// cacheFormatVersion identifies the on-disk shape of the gob-encoded
+// entries map. Bump on any change to that shape; a mismatch on Load is
+// treated as a cache miss (fall back to Build), never a decode
+// panic/silently-wrong data — see ADR-0004 and ADR-0010.
+const cacheFormatVersion = 1
+
+var cacheHeader = fmt.Sprintf("KSC%d\n", cacheFormatVersion)
+
+func writeCacheHeader(w io.Writer) error {
+	_, err := io.WriteString(w, cacheHeader)
+	return err
+}
+
+func readCacheHeader(r *bufio.Reader) error {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if line != cacheHeader {
+		return errors.New("index: cache format version mismatch")
+	}
+	return nil
+}
 
 // IndexEntry is a single Index record: a Note's metadata without its Body.
 type IndexEntry struct {
@@ -72,6 +100,9 @@ func (idx *Index) Save(path string) error {
 	}
 	defer f.Close()
 
+	if err := writeCacheHeader(f); err != nil {
+		return err
+	}
 	return gob.NewEncoder(f).Encode(idx.entries)
 }
 
@@ -83,8 +114,13 @@ func Load(path string, provider vault.VaultProvider, store notes.NoteStore) (*In
 	}
 	defer f.Close()
 
+	r := bufio.NewReader(f)
+	if err := readCacheHeader(r); err != nil {
+		return nil, err
+	}
+
 	entries := make(map[string]IndexEntry)
-	if err := gob.NewDecoder(f).Decode(&entries); err != nil {
+	if err := gob.NewDecoder(r).Decode(&entries); err != nil {
 		return nil, err
 	}
 

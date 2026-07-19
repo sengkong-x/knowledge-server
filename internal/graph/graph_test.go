@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"encoding/gob"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -450,6 +452,71 @@ C body.
 
 	if len(loaded.All()) != 2 {
 		t.Fatalf("All() = %+v, want LoadOrBuild to have used the stale cache (2 nodes), not rebuilt", loaded.All())
+	}
+}
+
+// writeStaleCache writes a cache file with a stale format header followed
+// by a validly gob-encoded graphData payload — so a Load that ignored the
+// header would decode it successfully (and wrongly). This is the scenario
+// version headers exist to catch, distinct from plain corrupt/garbage bytes
+// which gob would already reject on its own.
+func writeStaleCache(t *testing.T, path string, data graphData) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating stale-cache fixture: %v", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString("KSC0\n"); err != nil {
+		t.Fatalf("writing stale header: %v", err)
+	}
+	if err := gob.NewEncoder(f).Encode(data); err != nil {
+		t.Fatalf("encoding stale-cache payload: %v", err)
+	}
+}
+
+func TestLoad_ErrorsOnStaleCacheHeader(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "graph.gob")
+	writeStaleCache(t, cachePath, graphData{Entries: map[string]GraphEntry{}})
+
+	root := t.TempDir()
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+
+	if _, err := Load(cachePath, provider, store); err == nil {
+		t.Fatal("Load returned no error for a stale cache header, want error even though the payload decodes validly")
+	}
+}
+
+func TestLoadOrBuild_FallsBackWhenCacheHeaderStale(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "a.md", `---
+title: A
+related: [b]
+created: 2026-07-12
+---
+A body.
+`)
+	vaultfixture.WriteNote(t, root, "b.md", `---
+title: B
+created: 2026-07-12
+---
+B body.
+`)
+
+	cachePath := filepath.Join(t.TempDir(), "graph.gob")
+	writeStaleCache(t, cachePath, graphData{Entries: map[string]GraphEntry{}})
+
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+
+	g, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+	if len(g.All()) != 2 {
+		t.Fatalf("All() = %+v, want LoadOrBuild to have rebuilt from the vault (2 nodes)", g.All())
 	}
 }
 

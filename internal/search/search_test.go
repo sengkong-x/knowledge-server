@@ -1,6 +1,8 @@
 package search
 
 import (
+	"encoding/gob"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -219,6 +221,59 @@ Boil water.
 	}
 	if got := loaded.Query("Logical"); len(got) != 1 {
 		t.Fatalf("Query(Logical) = %+v, want the cached entry present", got)
+	}
+}
+
+// writeStaleCache writes a cache file with a stale format header followed
+// by a validly gob-encoded entries map — so a Load that ignored the header
+// would decode it successfully (and wrongly). This is the scenario version
+// headers exist to catch, distinct from plain corrupt/garbage bytes which
+// gob would already reject on its own.
+func writeStaleCache(t *testing.T, path string, entries map[string]searchEntry) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating stale-cache fixture: %v", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString("KSC0\n"); err != nil {
+		t.Fatalf("writing stale header: %v", err)
+	}
+	if err := gob.NewEncoder(f).Encode(entries); err != nil {
+		t.Fatalf("encoding stale-cache payload: %v", err)
+	}
+}
+
+func TestLoad_ErrorsOnStaleCacheHeader(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "search.gob")
+	writeStaleCache(t, cachePath, map[string]searchEntry{})
+
+	root := t.TempDir()
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+
+	if _, err := Load(cachePath, provider, store); err == nil {
+		t.Fatal("Load returned no error for a stale cache header, want error even though the payload decodes validly")
+	}
+}
+
+func TestLoadOrBuild_FallsBackWhenCacheHeaderStale(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "distributed-systems/hlc.md", clockNote)
+
+	cachePath := filepath.Join(t.TempDir(), "search.gob")
+	writeStaleCache(t, cachePath, map[string]searchEntry{})
+
+	provider := vault.NewLocalVaultProvider(root)
+	store := notes.NewVaultNoteStore(provider)
+
+	ss, _, err := LoadOrBuild(cachePath, provider, store)
+	if err != nil {
+		t.Fatalf("LoadOrBuild returned error: %v", err)
+	}
+	if got := ss.Query("Logical"); len(got) != 1 {
+		t.Fatalf("Query(Logical) = %+v, want LoadOrBuild to have rebuilt from the vault", got)
 	}
 }
 
