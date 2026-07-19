@@ -36,6 +36,7 @@ var layoutTemplate = template.Must(template.New("layout").Parse(`<!doctype html>
 <html data-theme="{{.Theme}}">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="/themes/base.css">
 <link rel="stylesheet" href="/themes/{{.Theme}}.css">
@@ -98,10 +99,10 @@ type layoutView struct {
 // has to discover.
 var navTemplate = template.Must(template.New("nav").Parse(`<nav>
 <div class="vault-picker" x-data="{open: {{if .HasVault}}false{{else}}true{{end}}}">
-<button type="button" @click="open = !open">{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}} &#9662;</button>
-<div x-show="open">
+<button type="button" @click="open = !open" class="id-chip">{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}} &#9662;</button>
+<div x-show="open" x-transition>
 <ul>
-{{range .History}}<li><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error">{{.}}</button></li>
+{{range .History}}<li><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="id-chip">{{.}}</button></li>
 {{end}}</ul>
 <div x-data="{adding: false}">
 <button type="button" @click="adding = !adding">Add new vault...</button>
@@ -218,9 +219,12 @@ type noteDetailView struct {
 	Neighbors []string
 }
 
-// browseTemplate lists notes as links to their detail page.
+// browseTemplate lists notes as links to their detail page. Each entry's ID
+// renders as a monospace "id-chip" (base.css) — a call-number-style
+// signature carried through everywhere a note ID/vault path appears in this
+// design, not just here.
 var browseTemplate = template.Must(template.New("browse").Parse(`<ul>
-{{range .Entries}}<li><a href="/notes/{{.ID}}">{{.Title}}</a></li>
+{{range .Entries}}<li><a href="/notes/{{.ID}}">{{.Title}}</a> <span class="id-chip">{{.ID}}</span></li>
 {{end}}</ul>`))
 
 type browseView struct {
