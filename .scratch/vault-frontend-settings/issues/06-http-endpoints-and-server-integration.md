@@ -4,7 +4,7 @@ created: 2026-07-19
 tags: [issue]
 ---
 
-Status: open
+Status: resolved
 Type: task
 
 ## Context

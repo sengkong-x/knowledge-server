@@ -10,18 +10,19 @@ import (
 	"sort"
 	"time"
 
+	"github.com/sengkong/knowledge-server/internal/activevault"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
-	"github.com/sengkong/knowledge-server/internal/state"
-	"github.com/sengkong/knowledge-server/internal/vault"
+	"github.com/sengkong/knowledge-server/internal/settings"
 	"github.com/sengkong/knowledge-server/web"
 	"github.com/yuin/goldmark"
 )
 
 // layoutTemplate wraps a page's content in the full HTML document: theme
-// CSS (driven by config's theme.default, see ADR "theme support"), vendored
-// HTMX/Alpine.js, and a live-update script that reacts to the /events SSE
-// ping (ADR-0009) by re-fetching the current page's content in place.
+// CSS (driven by ActiveVault's current theme, switchable at runtime — see
+// ADR-0011), vendored HTMX/Alpine.js, and a live-update script that reacts
+// to the /events SSE ping (ADR-0009) by re-fetching the current page's
+// content in place.
 var layoutTemplate = template.Must(template.New("layout").Parse(`<!doctype html>
 <html data-theme="{{.Theme}}">
 <head>
@@ -67,6 +68,27 @@ func renderFragment(tmpl *template.Template, data any) (template.HTML, error) {
 		return "", err
 	}
 	return template.HTML(buf.String()), nil
+}
+
+// noVaultSelectedTemplate is the fallback content for HTML routes when no
+// Active Vault is selected (a first-class, expected state — the server
+// boots into it and stays in it until the picker UI selects a vault).
+var noVaultSelectedTemplate = template.Must(template.New("noVault").Parse(
+	`<p>No vault selected. Pick one to get started.</p>`))
+
+// noVaultSelected renders the "no vault selected" fallback for an HTML
+// route so a missing Active Vault never reaches a nil provider/store/state
+// and panics.
+func noVaultSelected(w http.ResponseWriter, r *http.Request, theme string) {
+	content, _ := renderFragment(noVaultSelectedTemplate, nil)
+	render(w, r, theme, "No vault selected", content)
+}
+
+// noVaultSelectedJSON is the equivalent fallback for API routes.
+func noVaultSelectedJSON(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	json.NewEncoder(w).Encode(map[string]string{"error": "no vault selected"})
 }
 
 // noteDetailTemplate renders a note's title, goldmark-rendered body, and its
@@ -151,11 +173,26 @@ type graphDataResponse struct {
 	Nodes []graphNodeResponse `json:"nodes"`
 }
 
-func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, s *state.State, theme string) http.Handler {
-	if theme == "" {
-		theme = "light"
-	}
+type settingsResponse struct {
+	VaultPath    string   `json:"vault_path"`
+	Theme        string   `json:"theme"`
+	VaultHistory []string `json:"vault_history"`
+}
 
+type switchVaultRequest struct {
+	Path string `json:"path"`
+}
+
+type switchThemeRequest struct {
+	Theme string `json:"theme"`
+}
+
+// New builds the http.Handler for a running instance. Every route reads the
+// Active Vault fresh per request via av.Snapshot()/av.Theme() rather than
+// closing over a vault/theme captured once at construction time, since
+// ADR-0011 lets av.Switch/SetTheme change what's active at any point in the
+// server's lifetime.
+func New(av *activevault.ActiveVault) http.Handler {
 	mux := http.NewServeMux()
 
 	assets := http.FileServerFS(web.FS)
@@ -164,6 +201,13 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	mux.Handle("GET /js/", assets)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		theme := av.Theme()
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelected(w, r, theme)
+			return
+		}
+
 		tag := r.URL.Query().Get("tag")
 
 		var entries []index.IndexEntry
@@ -182,6 +226,13 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /search/ui", func(w http.ResponseWriter, r *http.Request) {
+		theme := av.Theme()
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelected(w, r, theme)
+			return
+		}
+
 		q := r.URL.Query().Get("q")
 
 		var results []searchResultResponse
@@ -210,9 +261,21 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/ui", func(w http.ResponseWriter, r *http.Request) {
-		render(w, r, theme, "Graph", template.HTML(graphUITemplate))
+		render(w, r, av.Theme(), "Graph", template.HTML(graphUITemplate))
 	})
 
+	// /events: an SSE connection subscribes to the currently active vault's
+	// State for content-change pings (ADR-0009). A vault switch discards
+	// that State and swaps in a new one (Ticket 05), which would otherwise
+	// leave any already-open /events connection subscribed to a State
+	// nobody will ever notify again — a silent "stops updating" gap rather
+	// than a visible failure. Resolution (deliberately chosen over the
+	// alternative of leaving it silently stale): also subscribe to
+	// av.SubscribeSwitch(), and end the stream the moment a switch happens.
+	// The browser's EventSource auto-reconnects on a closed connection,
+	// which re-runs this handler, re-Snapshots, and subscribes fresh to the
+	// new State — so a switch costs one reconnect, not a silently stopped
+	// feed.
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -220,8 +283,17 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			return
 		}
 
-		ch, unsubscribe := s.Subscribe()
-		defer unsubscribe()
+		_, _, _, s, hasVault := av.Snapshot()
+
+		var stateCh <-chan struct{}
+		unsubState := func() {}
+		if hasVault {
+			stateCh, unsubState = s.Subscribe()
+		}
+		defer unsubState()
+
+		switchCh, unsubSwitch := av.SubscribeSwitch()
+		defer unsubSwitch()
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -233,7 +305,9 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			select {
 			case <-r.Context().Done():
 				return
-			case <-ch:
+			case <-switchCh:
+				return
+			case <-stateCh:
 				// Generic "something changed" ping, no per-note payload
 				// (see ADR-0009) — every listening view re-fetches its own
 				// current content rather than reasoning about what changed.
@@ -250,6 +324,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 		// VaultProvider.ReadAsset rejects any escape of the Vault root on
 		// its own behalf, since it's the abstraction that owns filesystem
 		// safety, not this transport-layer handler.
+		_, provider, _, _, ok := av.Snapshot()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+
 		reqPath := r.PathValue("path")
 
 		data, err := provider.ReadAsset(reqPath)
@@ -261,6 +341,13 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /notes/{id...}", func(w http.ResponseWriter, r *http.Request) {
+		theme := av.Theme()
+		_, _, store, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelected(w, r, theme)
+			return
+		}
+
 		id := r.PathValue("id")
 		note, err := store.Load(id)
 		if err != nil {
@@ -296,20 +383,33 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		path, provider, _, _, ok := av.Snapshot()
+
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			json.NewEncoder(w).Encode(healthResponse{})
+			return
+		}
+
 		notes, err := provider.ListNotes()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(healthResponse{
-			VaultPath: vaultPath,
+			VaultPath: path,
 			NoteCount: len(notes),
 		})
 	})
 
 	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		q := r.URL.Query().Get("q")
 		tag := r.URL.Query().Get("tag")
 		if q == "" && tag == "" {
@@ -352,6 +452,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/neighbors", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		id := r.URL.Query().Get("id")
 		neighbors, err := s.Neighbors(id)
 		if err != nil {
@@ -364,6 +470,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/path", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		from := r.URL.Query().Get("from")
 		to := r.URL.Query().Get("to")
 		path, found, err := s.ShortestPath(from, to)
@@ -377,11 +489,23 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/orphans", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(orphansResponse{Orphans: s.Orphans()})
 	})
 
 	mux.HandleFunc("GET /graph/data", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		entries := s.GraphAll()
 		nodes := make([]graphNodeResponse, 0, len(entries))
 		for _, entry := range entries {
@@ -395,6 +519,77 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(graphDataResponse{Nodes: nodes})
+	})
+
+	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {
+		s, err := settings.Load()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(settingsResponse{
+			VaultPath:    s.VaultPath,
+			Theme:        s.Theme,
+			VaultHistory: s.VaultHistory,
+		})
+	})
+
+	// PUT, not POST: switching the vault sets the one current selection
+	// (an idempotent "this is now the active vault" state change) rather
+	// than creating a new resource — same reasoning for PUT /theme below.
+	// No existing route in this table sets a precedent either way (all are
+	// GET), so this is a fresh choice, documented here rather than left
+	// implicit.
+	mux.HandleFunc("PUT /vault", func(w http.ResponseWriter, r *http.Request) {
+		var req switchVaultRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := av.Switch(req.Path); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		canonical, _, _, _, _ := av.Snapshot()
+		saved, err := settings.Load()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := settings.Save(saved.WithVault(canonical)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("PUT /theme", func(w http.ResponseWriter, r *http.Request) {
+		var req switchThemeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		av.SetTheme(req.Theme)
+
+		saved, err := settings.Load()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := settings.Save(saved.WithTheme(req.Theme)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
 	})
 
 	return mux

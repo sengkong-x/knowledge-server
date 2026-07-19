@@ -14,11 +14,10 @@ import (
 // the noise of the full 64-character digest.
 const cacheKeyLength = 32
 
-// CanonicalPath expands a leading "~" (matching the bare-"~"-prefix scope
-// of the tilde handling formerly in internal/config/config.go — "~user"
-// is not supported, same as before), makes the result absolute, and
-// resolves symlinks, so the same physical vault always canonicalizes
-// identically regardless of how its path was written.
+// CanonicalPath expands a leading "~" (bare "~" only — "~user" is not
+// supported), makes the result absolute, and resolves symlinks, so the
+// same physical vault always canonicalizes identically regardless of how
+// its path was written.
 //
 // The path must exist for symlink resolution to succeed; a nonexistent
 // path is treated as an error here rather than deferred, since a cache
