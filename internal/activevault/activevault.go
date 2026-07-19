@@ -166,6 +166,17 @@ func (av *ActiveVault) Shutdown() error {
 // watcher, and kicks off a background staleness reconciliation. newPath
 // must pass vault.ValidateRoot before anything about the outgoing vault is
 // touched — a bad path must never tear down a perfectly good vault.
+//
+// Deliberately builds the entire incoming subsystem (provider, store,
+// LoadOrBuild, watcher.Start) before taking av.mu, rather than holding the
+// write lock across that whole (potentially slow) sequence: this keeps
+// concurrent Snapshot() reads unblocked for longer, and as a side effect
+// means a failure partway through building the incoming vault (a LoadOrBuild
+// or watcher error) also leaves the outgoing vault completely untouched, not
+// just a failed ValidateRoot. The two watchers briefly coexist (incoming
+// started, outgoing not yet closed) only for the few instructions between
+// building the incoming one and taking the lock — harmless, since each
+// watches a disjoint filesystem root.
 func (av *ActiveVault) Switch(newPath string) error {
 	canonical, err := vault.CanonicalPath(newPath)
 	if err != nil {
@@ -256,6 +267,16 @@ func (av *ActiveVault) logBuildReport(vaultPath string, report engines.BuildRepo
 // rebuild, so a cache hit still avoids re-parsing every note. s already
 // pings SSE subscribers on every Upsert/Remove (see internal/state), so
 // this reuses that plumbing with no server-side changes needed.
+//
+// Deliberate limitation: this only catches notes added or removed while the
+// vault was inactive, by diffing IDs — it does not detect a note whose ID
+// is unchanged but whose content was edited in place during that window
+// (that would need per-file mtime tracking, which none of IndexEntry,
+// vault.VaultProvider, or notes.NoteStore carry today, and adding it would
+// mean reopening the already-settled cache-entry shape from Ticket 01/02).
+// A content-only edit made while a vault wasn't the Active Vault surfaces
+// once the Watcher notices it live, the next time that vault becomes active
+// and gets re-watched — not before.
 func (av *ActiveVault) reconcile(provider vault.VaultProvider, s *state.State, done chan struct{}) {
 	defer close(done)
 
