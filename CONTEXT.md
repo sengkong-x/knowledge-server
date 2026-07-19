@@ -51,3 +51,11 @@ _Avoid_: Triad, State (that's the concurrency-guarding layer above Engines, not 
 **Watcher**:
 Monitors the Vault for filesystem changes and drives incremental `Upsert`/`Remove` calls into `Index`, `SearchStore`, and `Graph` so they stay current without a full rebuild or a server restart. Lives in `internal/watcher`. Reacts only to Note files; asset changes don't affect any of the three engines and are ignored.
 _Avoid_: Poller (the mechanism is event-driven, not polling), File watcher (redundant with Vault-scoping already implied)
+
+**Active Vault**:
+The one Vault a running server instance currently has loaded — selected via the frontend, not a startup argument (see ADR-0011). A server may hold no Active Vault (fresh boot, none selected yet) or switch its Active Vault at runtime, which discards the outgoing vault's in-memory `Engines` after saving them and builds or reloads the incoming one.
+_Avoid_: Current vault, selected vault
+
+**Settings**:
+The small durable record of the user's last choices — the Active Vault's path and the current theme — persisted at `~/.config/ks/settings.json` so a restart reopens the same vault instead of booting with none selected. Distinct from the per-vault `Engines` cache (disposable, keyed by vault path under `~/.cache/ks/`): Settings is the one thing that must survive a cache wipe.
+_Avoid_: Config, preferences (this project reserves "config" for the removed `config.yaml`, see ADR-0011)
