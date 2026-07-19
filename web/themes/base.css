@@ -1,10 +1,11 @@
-/* Type: a serif for headings/note titles (this is a reading tool, not app
-   chrome), system sans for UI controls, monospace for anything
-   catalog-like — note IDs, vault paths, tags — read as call numbers, not
-   prose. All system stacks; no network font fetches. */
+/* Type: one modern sans family throughout — headings lean on weight and
+   tight tracking for hierarchy instead of switching to a serif, monospace
+   stays reserved for anything catalog-like — note IDs, vault paths, tags —
+   read as call numbers, not prose. All system stacks; no network font
+   fetches. */
 :root {
-  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", ui-serif, serif;
-  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --space-1: 0.25rem;
@@ -22,23 +23,33 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-body);
+  font-size: 16px;
   line-height: 1.6;
-  max-width: 44rem;
+  max-width: 56rem;
   margin: 0 auto;
   padding: 0 var(--space-4) var(--space-5);
   transition: background-color 150ms ease, color 150ms ease;
 }
 
+/* Note bodies read best at a narrower measure than the card/list views, so
+   they get their own constrained wrapper rather than narrowing the whole
+   page. */
+.note {
+  max-width: 42rem;
+  margin: 0 auto;
+}
+
 h1, h2 {
   font-family: var(--font-display);
-  font-weight: 600;
-  line-height: 1.25;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
   margin: var(--space-4) 0 var(--space-2);
 }
 
 h1 {
   font-size: 2rem;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.03em;
 }
 
 h2 {
@@ -118,6 +129,156 @@ form {
   gap: var(--space-2);
 }
 
+/* Entry list: the browse/search results view. Each note is a card, not a
+   bare bullet — the title carries the bold display weight, the id-chip
+   keeps its call-number treatment, and tags read as small catalog labels. */
+.entry-list {
+  list-style: none;
+  margin: var(--space-3) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.entry-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.entry-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+.entry-card-title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.entry-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.entry-card-snippet {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.tag {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1em 0.6em;
+}
+
+/* Empty state: shown for "no vault selected", empty search results, and any
+   other zero-content view. Centered, quiet, icon-led — a call to action
+   rather than a bare sentence. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  padding: var(--space-5) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  margin: var(--space-3) 0;
+}
+
+.empty-state svg {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+/* Search bar: icon-led input with an inline submit button, replacing the
+   bare unlabeled text field. */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 var(--space-1) 0 var(--space-2);
+}
+
+.search-bar:focus-within {
+  border-color: var(--accent);
+}
+
+.search-bar svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.search-bar input[type="text"] {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: var(--space-2) 0;
+}
+
+.search-bar input[type="text"]:focus {
+  outline: none;
+}
+
+.search-bar button {
+  flex: none;
+}
+
+/* Graph panel: gives the Cytoscape canvas a header/subtitle instead of
+   dropping a bare <div> on the page, and a loading message shown until
+   graph.js finishes its fetch and swaps it out. */
+.graph-panel-header {
+  margin-bottom: var(--space-2);
+}
+
+.graph-panel-header h1 {
+  margin-bottom: 0;
+}
+
+.graph-panel-header p {
+  color: var(--muted);
+  margin: 0;
+}
+
+/* graph.js adds .cy-loaded to #cy once Cytoscape has rendered — until then
+   this placeholder shows, since Cytoscape only ever appends its own canvas
+   layers and never clears content that was already there. */
+#cy:not(.cy-loaded)::before {
+  content: "Loading graph…";
+  display: block;
+  color: var(--muted);
+  padding: var(--space-3);
+}
+
+#cy.cy-error {
+  color: var(--muted);
+  padding: var(--space-3);
+}
+
 /* Nav: the very first chrome this layout has had (Ticket 07). A quiet
    header bar, not a dashboard — separated from page content by a hairline
    border, matching the reading-tool tone of the rest of the design. */
@@ -125,11 +286,75 @@ nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   margin: 0 calc(var(--space-4) * -1);
   padding: var(--space-2) var(--space-4);
+}
+
+nav .nav-start {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+nav .nav-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.brand svg {
+  color: var(--accent);
+}
+
+.nav-links {
+  display: flex;
+  list-style: none;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0;
+  margin: 0;
+}
+
+.nav-links a {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: var(--space-1) 0;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-links a:hover {
+  color: var(--fg);
+}
+
+.nav-links a.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+/* Icon-only buttons (theme toggle) get an aria-label in the markup and a
+   fixed square hit area so they still meet the touch-target minimum. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
 }
 
 nav ul {
@@ -143,7 +368,17 @@ nav .vault-picker {
 }
 
 nav .vault-picker > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   font-family: var(--font-mono);
+  max-width: 22rem;
+}
+
+nav .vault-picker > button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 nav .vault-picker > div[x-show] {
@@ -151,13 +386,34 @@ nav .vault-picker > div[x-show] {
   top: 100%;
   left: 0;
   z-index: 1;
-  min-width: 16rem;
+  min-width: 18rem;
+  max-width: 26rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: var(--space-2) var(--space-3);
   margin-top: var(--space-1);
+}
+
+nav .vault-picker ul {
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+nav .vault-picker li button {
+  width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+nav .vault-picker > div[x-show] > div {
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
 }
 
 #vault-error {
@@ -185,5 +441,34 @@ nav .vault-picker > div[x-show] {
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 0 var(--space-3) var(--space-4);
+  }
+
+  nav {
+    margin: 0 calc(var(--space-3) * -1);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  nav .nav-start {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+  }
+
+  .nav-links {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  nav .vault-picker > button {
+    max-width: 10rem;
+  }
+
+  h1 {
+    font-size: 1.6rem;
   }
 }

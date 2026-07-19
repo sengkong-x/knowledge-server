@@ -75,6 +75,25 @@ type layoutView struct {
 	Nav     template.HTML
 }
 
+// The icon inner-paths below are each used at more than one size/context
+// across the templates in this file (e.g. the vault icon in both the nav
+// picker and the empty state), so they're named constants rather than
+// inline markup repeated verbatim at each call site.
+const (
+	iconPathBook   = `<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>`
+	iconPathVault  = `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>`
+	iconPathSearch = `<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>`
+)
+
+// svgIcon renders an inline SVG icon at the given size and stroke weight —
+// a shared shape for every icon in this file's templates rather than
+// duplicating the surrounding <svg> attributes at each call site.
+func svgIcon(size int, strokeWidth, innerPath string) template.HTML {
+	return template.HTML(fmt.Sprintf(
+		`<svg width="%d" height="%d" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="%s" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">%s</svg>`,
+		size, size, strokeWidth, innerPath))
+}
+
 // navTemplate is the vault-picker + theme-toggle chrome shown on every
 // page (there was no nav anywhere before this ticket). The picker lists
 // VaultHistory (from GET /settings) as switch triggers, plus an "Add new
@@ -98,24 +117,38 @@ type layoutView struct {
 // empty state's primary call to action, not a collapsed control the user
 // has to discover.
 var navTemplate = template.Must(template.New("nav").Parse(`<nav>
+<div class="nav-start">
+<span class="brand">` + string(svgIcon(20, "2", iconPathBook)) + ` Knowledge Server</span>
+<ul class="nav-links">
+<li><a href="/" class="{{if eq .Active "browse"}}active{{end}}">Browse</a></li>
+<li><a href="/search/ui" class="{{if eq .Active "search"}}active{{end}}">Search</a></li>
+<li><a href="/graph/ui" class="{{if eq .Active "graph"}}active{{end}}">Graph</a></li>
+</ul>
+</div>
+<div class="nav-end">
 <div class="vault-picker" x-data="{open: {{if .HasVault}}false{{else}}true{{end}}}">
-<button type="button" @click="open = !open" class="id-chip">{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}} &#9662;</button>
+<button type="button" @click="open = !open" class="id-chip" aria-haspopup="true" :aria-expanded="open">
+` + string(svgIcon(14, "2", iconPathVault)) + `
+<span>{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}}</span>
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+</button>
 <div x-show="open" x-transition>
 <ul>
 {{range .History}}<li><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="id-chip">{{.}}</button></li>
 {{end}}</ul>
 <div x-data="{adding: false}">
-<button type="button" @click="adding = !adding">Add new vault...</button>
-<template x-if="adding">
-<div>
+<button type="button" @click="adding = !adding">Add new vault&hellip;</button>
+<div x-show="adding">
 <input type="text" id="new-vault-path" name="path" placeholder="/path/to/vault">
 <button hx-put="/vault" hx-include="#new-vault-path" hx-swap="none" data-error-target="#vault-error">Switch</button>
 </div>
-</template>
 </div>
 </div>
 </div>
-<button hx-put="/theme" hx-vals='{"theme": "{{.NextTheme}}"}' hx-swap="none">{{if eq .Theme "dark"}}Light mode{{else}}Dark mode{{end}}</button>
+<button class="icon-button" hx-put="/theme" hx-vals='{"theme": "{{.NextTheme}}"}' hx-swap="none" aria-label="{{if eq .Theme "dark"}}Switch to light mode{{else}}Switch to dark mode{{end}}">
+{{if eq .Theme "dark"}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>{{else}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>{{end}}
+</button>
+</div>
 <span id="vault-error" role="alert"></span>
 </nav>`))
 
@@ -125,9 +158,10 @@ type navView struct {
 	History     []string
 	Theme       string
 	NextTheme   string
+	Active      string
 }
 
-func renderNav(av *activevault.ActiveVault) (template.HTML, error) {
+func renderNav(av *activevault.ActiveVault, active string) (template.HTML, error) {
 	path, _, _, _, hasVault := av.Snapshot()
 	theme := av.Theme()
 
@@ -147,6 +181,7 @@ func renderNav(av *activevault.ActiveVault) (template.HTML, error) {
 		History:     s.VaultHistory,
 		Theme:       theme,
 		NextTheme:   nextTheme,
+		Active:      active,
 	})
 }
 
@@ -155,14 +190,14 @@ func renderNav(av *activevault.ActiveVault) (template.HTML, error) {
 // request (identified by the HX-Request header) — the live-update script
 // above swaps the latter into #page-content without re-loading <head> or
 // the nav.
-func render(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault, title string, content template.HTML) {
+func render(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault, title string, content template.HTML, active string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Header.Get("HX-Request") == "true" {
 		w.Write([]byte(content))
 		return
 	}
 
-	nav, err := renderNav(av)
+	nav, err := renderNav(av, active)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -184,15 +219,18 @@ func renderFragment(tmpl *template.Template, data any) (template.HTML, error) {
 // boots into it and stays in it until the picker UI selects a vault). The
 // nav's own picker (rendered expanded in this state, see navTemplate) is
 // the primary call to action; this is just the content-area companion.
-var noVaultSelectedTemplate = template.Must(template.New("noVault").Parse(
-	`<p>No vault selected. Pick one to get started.</p>`))
+var noVaultSelectedTemplate = template.Must(template.New("noVault").Parse(`<div class="empty-state">
+` + string(svgIcon(40, "1.5", iconPathVault)) + `
+<p>No vault selected.</p>
+<p>Pick one from the vault picker above to get started.</p>
+</div>`))
 
 // noVaultSelected renders the "no vault selected" fallback for an HTML
 // route so a missing Active Vault never reaches a nil provider/store/state
 // and panics.
 func noVaultSelected(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault) {
 	content, _ := renderFragment(noVaultSelectedTemplate, nil)
-	render(w, r, av, "No vault selected", content)
+	render(w, r, av, "No vault selected", content, "")
 }
 
 // noVaultSelectedJSON is the equivalent fallback for API routes.
@@ -206,12 +244,15 @@ func noVaultSelectedJSON(w http.ResponseWriter) {
 // Graph neighbors as related-note links. Body is produced by goldmark from
 // trusted, locally-authored Vault content and is intentionally not escaped
 // further; Title and Neighbors are escaped normally.
-var noteDetailTemplate = template.Must(template.New("note").Parse(`<h1>{{.Title}}</h1>
+var noteDetailTemplate = template.Must(template.New("note").Parse(`<article class="note">
+<a href="/">&larr; Back to browse</a>
+<h1>{{.Title}}</h1>
 {{.Body}}
 {{if .Neighbors}}<h2>Related notes</h2>
 <ul>
 {{range .Neighbors}}<li><a href="/notes/{{.}}" class="id-chip">{{.}}</a></li>
-{{end}}</ul>{{end}}`))
+{{end}}</ul>{{end}}
+</article>`))
 
 type noteDetailView struct {
 	Title     string
@@ -223,21 +264,36 @@ type noteDetailView struct {
 // renders as a monospace "id-chip" (base.css) — a call-number-style
 // signature carried through everywhere a note ID/vault path appears in this
 // design, not just here.
-var browseTemplate = template.Must(template.New("browse").Parse(`<ul>
-{{range .Entries}}<li><a href="/notes/{{.ID}}">{{.Title}}</a> <span class="id-chip">{{.ID}}</span></li>
-{{end}}</ul>`))
+var browseTemplate = template.Must(template.New("browse").Parse(`<h1>Browse</h1>
+{{if .Entries}}<ul class="entry-list">
+{{range .Entries}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
+<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+</li>
+{{end}}</ul>{{else}}<div class="empty-state">
+` + string(svgIcon(40, "1.5", iconPathBook)) + `
+<p>This vault has no notes yet.</p>
+</div>{{end}}`))
 
 type browseView struct {
 	Entries []index.IndexEntry
 }
 
 // searchUITemplate renders a search form plus any matching results.
-var searchUITemplate = template.Must(template.New("searchUI").Parse(`<form hx-get="/search/ui" hx-target="#page-content">
-<input type="text" name="q" value="{{.Query}}">
+var searchUITemplate = template.Must(template.New("searchUI").Parse(`<h1>Search</h1>
+<form hx-get="/search/ui" hx-target="#page-content" class="search-bar">
+` + string(svgIcon(16, "2", iconPathSearch)) + `
+<input type="text" name="q" value="{{.Query}}" placeholder="Search notes..." aria-label="Search notes" autofocus>
+<button type="submit">Search</button>
 </form>
-<ul>
-{{range .Results}}<li><a href="/notes/{{.ID}}">{{.Title}}</a></li>
-{{end}}</ul>`))
+{{if .Results}}<ul class="entry-list">
+{{range .Results}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
+{{if .Snippet}}<p class="entry-card-snippet">{{.Snippet}}</p>{{end}}
+<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+</li>
+{{end}}</ul>{{else if .Query}}<div class="empty-state">
+` + string(svgIcon(40, "1.5", iconPathSearch)) + `
+<p>No notes match &ldquo;{{.Query}}&rdquo;.</p>
+</div>{{end}}`))
 
 type searchUIView struct {
 	Query   string
@@ -248,7 +304,11 @@ type searchUIView struct {
 // itself and the script that fetches /graph/data into it are vendored
 // frontend assets (see ADR-0007's companion asset-vendoring deliverable),
 // not written here.
-const graphUITemplate = `<div id="cy"></div>
+const graphUITemplate = `<div class="graph-panel-header">
+<h1>Graph</h1>
+<p>Notes linked by <code>related</code>, laid out by connectivity.</p>
+</div>
+<div id="cy"></div>
 <script src="/vendor/cytoscape.min.js"></script>
 <script src="/js/graph.js" data-source="/graph/data"></script>`
 
@@ -379,7 +439,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, av, "Browse", content)
+		render(w, r, av, "Browse", content, "browse")
 	})
 
 	mux.HandleFunc("GET /search/ui", func(w http.ResponseWriter, r *http.Request) {
@@ -413,11 +473,11 @@ func New(av *activevault.ActiveVault) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, av, "Search", content)
+		render(w, r, av, "Search", content, "search")
 	})
 
 	mux.HandleFunc("GET /graph/ui", func(w http.ResponseWriter, r *http.Request) {
-		render(w, r, av, "Graph", template.HTML(graphUITemplate))
+		render(w, r, av, "Graph", template.HTML(graphUITemplate), "graph")
 	})
 
 	// /events: an SSE connection subscribes to the currently active vault's
@@ -534,7 +594,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, av, note.Title, content)
+		render(w, r, av, note.Title, content, "")
 	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
