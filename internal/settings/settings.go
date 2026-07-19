@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 )
 
 // maxVaultHistory bounds VaultHistory so the file doesn't grow unbounded
@@ -19,7 +18,14 @@ const maxVaultHistory = 10
 
 // Settings is the durable, cross-restart state written to settings.json.
 type Settings struct {
-	VaultPath    string   `json:"vault_path"`
+	VaultPath string `json:"vault_path"`
+	// Theme intentionally carries no default here: this package is a dumb
+	// persistence layer (see the package doc), and
+	// internal/server/server.go already falls back to "light" when given
+	// an empty theme (server.go:155-157, predates this package). That
+	// existing fallback is kept as the single source of truth for the
+	// default rather than duplicated here, so the two don't silently
+	// disagree.
 	Theme        string   `json:"theme"`
 	VaultHistory []string `json:"vault_history"`
 }
@@ -113,7 +119,6 @@ func (s Settings) WithVault(path string) Settings {
 			history = append(history, p)
 		}
 	}
-	history = slices.Clone(history)
 	if len(history) > maxVaultHistory {
 		history = history[:maxVaultHistory]
 	}
