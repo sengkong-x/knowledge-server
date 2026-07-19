@@ -14,23 +14,12 @@ It's a personal "second brain" for continuous capture, organization, and reuse o
 
 ```sh
 go build -o ks ./cmd
-./ks --config ./config.yaml
+./ks --port 8080
 ```
 
-`--config` defaults to `./config.yaml` if omitted.
+`--port` defaults to `8080` if omitted.
 
-### Configuration
-
-```yaml
-vault:
-  path: ~/knowledge   # ~ expands to the home directory; must exist and be a directory
-server:
-  port: 8080
-theme:
-  default: dark       # light or dark; drives which CSS file the renderer links
-```
-
-`vault.path` supports a leading `~` for the home directory. The server fails fast at startup if `vault.path` doesn't exist or isn't a directory.
+The server boots with no vault selected — there's no config file and no required startup argument for which Vault to open. Open the browser to the port above and use the vault picker in the nav bar to select an existing vault path or add a new one; switching vaults and toggling light/dark theme are both done from there at runtime. Your last selection (vault path, theme, and a short history of previously-opened vaults) is saved to `~/.config/ks/settings.json` and restored automatically the next time you start `./ks`.
 
 ### Health check
 
@@ -52,9 +41,10 @@ go test ./...
 ## Project layout
 
 ```
-cmd/            entry point — wires config, vault, engines, watcher, and server; no business logic
+cmd/            entry point — wires settings, ActiveVault, and server; no business logic
 internal/
-  config/       config.yaml loading
+  settings/     durable settings.json persistence (active vault path, theme, vault history)
+  activevault/  the single Vault a running instance currently has open, and switch orchestration
   vault/        VaultProvider — filesystem access to the Vault
   parser/       pure Markdown/frontmatter parsing into a Note
   notes/        NoteStore — VaultProvider + parser composed into parsed Note access
@@ -67,18 +57,7 @@ internal/
   server/       HTTP layer (stdlib net/http.ServeMux only, see docs/adr/0002)
   logger/       slog setup
 web/            vendored frontend assets (HTMX, Alpine.js, Cytoscape.js, theme CSS)
-docs/           architecture doc, ADRs, and (see below) a second Vault for viewing them
+docs/           architecture doc and ADRs
 ```
 
 See `docs/architecture.md` for a full walkthrough (C4 diagrams, request lifecycle, persistence), `CONTEXT.md` for domain vocabulary, and `docs/adr/` for individual architectural decisions.
-
-## Viewing the documentation through `./ks`
-
-The files under `docs/` (the architecture doc and every ADR) are themselves valid Notes — each carries the `title`/`created` frontmatter the parser requires — so `docs/` doubles as a second Vault. `docs/config.yaml` points at it:
-
-```sh
-go build -o ks ./cmd
-./ks --config ./docs/config.yaml
-```
-
-This starts a second instance, browsable, searchable, and graph-viewable exactly like your real Vault, on its own port so it can run alongside your normal `./ks --config ./config.yaml` instance. `docs/config.yaml` is checked into the repo (unlike the root `config.yaml`, which is gitignored since it points at your personal Vault) — it ships with the project so this works right after cloning.
