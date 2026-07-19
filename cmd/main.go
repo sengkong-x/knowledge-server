@@ -8,12 +8,18 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/sengkong/knowledge-server/internal/activevault"
 	"github.com/sengkong/knowledge-server/internal/logger"
 	"github.com/sengkong/knowledge-server/internal/server"
 	"github.com/sengkong/knowledge-server/internal/settings"
 )
+
+// shutdownTimeout bounds how long graceful shutdown waits for in-flight
+// requests (e.g. an open /events SSE stream) before forcing connections
+// closed, so Ctrl+C always exits instead of hanging indefinitely.
+const shutdownTimeout = 5 * time.Second
 
 func main() {
 	port := flag.Int("port", 8080, "HTTP port to listen on")
@@ -60,7 +66,17 @@ func main() {
 		log.Warn("shutting down active vault", "error", err)
 	}
 
-	if err := httpServer.Shutdown(context.Background()); err != nil {
-		log.Warn("server shutdown", "error", err)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		// Shutdown only returns early on ctx expiry or a listener error; it
+		// never force-closes long-lived connections (e.g. an open /events
+		// SSE stream) on its own. Close() forces them so the process still
+		// exits instead of hanging on Ctrl+C.
+		log.Warn("server shutdown timed out, forcing close", "error", err)
+		if closeErr := httpServer.Close(); closeErr != nil {
+			log.Warn("forcing server close", "error", closeErr)
+		}
 	}
 }
