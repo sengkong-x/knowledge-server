@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sengkong/knowledge-server/internal/activevault"
+	"github.com/sengkong/knowledge-server/internal/settings"
 	"github.com/sengkong/knowledge-server/internal/state"
 	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/internal/vaultfixture"
@@ -1140,5 +1141,97 @@ Body.
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for /events to close after a vault switch")
+	}
+}
+
+func TestBrowse_FullPageRenderIncludesNavWithVaultHistory(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	canonical, _, _, _, _ := av.Snapshot()
+	if err := settings.Save(settings.Settings{VaultPath: canonical, VaultHistory: []string{canonical, "/some/other/vault"}}); err != nil {
+		t.Fatalf("settings.Save: %v", err)
+	}
+
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "<nav>") {
+		t.Errorf("body = %q, want a <nav> element on a full page render", body)
+	}
+	if !strings.Contains(body, canonical) {
+		t.Errorf("body = %q, want the current vault path listed in the picker", body)
+	}
+	if !strings.Contains(body, "/some/other/vault") {
+		t.Errorf("body = %q, want vault history entries listed in the picker", body)
+	}
+	if !strings.Contains(body, `id="page-content"`) {
+		t.Errorf("body = %q, want a #page-content wrapper separate from the nav", body)
+	}
+}
+
+func TestBrowse_HTMXFragmentRenderExcludesNav(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, "<nav>") {
+		t.Errorf("body = %q, want an HTMX fragment response to omit the nav (it survives swaps by not being re-sent)", body)
+	}
+}
+
+func TestNav_PickerExpandedByDefaultWhenNoVaultSelected(t *testing.T) {
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "open: true") {
+		t.Errorf("body = %q, want the picker's x-data to start expanded (open: true) when no vault is selected", body)
 	}
 }

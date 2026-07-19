@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -20,9 +22,16 @@ import (
 
 // layoutTemplate wraps a page's content in the full HTML document: theme
 // CSS (driven by ActiveVault's current theme, switchable at runtime — see
-// ADR-0011), vendored HTMX/Alpine.js, and a live-update script that reacts
-// to the /events SSE ping (ADR-0009) by re-fetching the current page's
-// content in place.
+// ADR-0011), vendored HTMX/Alpine.js, the vault-picker nav (Ticket 07), and
+// a live-update script that reacts to the /events SSE ping (ADR-0009) by
+// re-fetching the current page's content in place.
+//
+// Page content lives inside #page-content, deliberately separate from
+// {{.Nav}}: every HTMX-driven update in this app (the SSE live-update
+// script below, searchUITemplate's form) targets #page-content rather than
+// <body>, specifically so the nav survives those swaps instead of being
+// wiped out by them — <body> previously had nothing else in it, so
+// targeting the whole body was harmless before this ticket added the nav.
 var layoutTemplate = template.Must(template.New("layout").Parse(`<!doctype html>
 <html data-theme="{{.Theme}}">
 <head>
@@ -34,10 +43,25 @@ var layoutTemplate = template.Must(template.New("layout").Parse(`<!doctype html>
 <script src="/vendor/alpine.min.js" defer></script>
 </head>
 <body>
+{{.Nav}}
+<div id="page-content">
 {{.Content}}
+</div>
 <script>
+document.body.addEventListener("htmx:responseError", function (evt) {
+  var targetSel = evt.detail.elt.getAttribute("data-error-target");
+  if (!targetSel) return;
+  var el = document.querySelector(targetSel);
+  if (!el) return;
+  var message = "Request failed.";
+  try {
+    var body = JSON.parse(evt.detail.xhr.responseText);
+    if (body.error) message = body.error;
+  } catch (e) {}
+  el.textContent = message;
+});
 new EventSource("/events").onmessage = function () {
-  htmx.ajax("GET", window.location.pathname + window.location.search, {target: "body", swap: "innerHTML"});
+  htmx.ajax("GET", window.location.pathname + window.location.search, {target: "#page-content", swap: "innerHTML"});
 };
 </script>
 </body>
@@ -47,19 +71,103 @@ type layoutView struct {
 	Theme   string
 	Title   string
 	Content template.HTML
+	Nav     template.HTML
 }
 
-// render writes content wrapped in the full page layout for a normal
-// browser navigation, or just content on its own for an HTMX request
-// (identified by the HX-Request header) — the live-update script above
-// swaps the latter into <body> without re-loading <head>.
-func render(w http.ResponseWriter, r *http.Request, theme, title string, content template.HTML) {
+// navTemplate is the vault-picker + theme-toggle chrome shown on every
+// page (there was no nav anywhere before this ticket). The picker lists
+// VaultHistory (from GET /settings) as switch triggers, plus an "Add new
+// vault..." toggle revealing a free-text path input — an Alpine x-data
+// dropdown, since Alpine's already vendored for exactly this kind of small
+// interactive widget (see web/vendor/alpine.min.js).
+//
+// Every action here (hx-put="/vault", hx-put="/theme") sets hx-swap="none"
+// and relies on the server setting an HX-Refresh response header on
+// success (see the PUT /vault and PUT /theme handlers below) to trigger a
+// full page reload — simpler and more correct than trying to swap in a
+// freshly rendered page fragment, and it naturally re-renders both the nav
+// (now reflecting the new vault/theme) and the content in one browser
+// navigation. On failure (no HX-Refresh header, a JSON error body instead),
+// the htmx:responseError listener in layoutTemplate reads the triggering
+// element's data-error-target attribute and writes the error message into
+// that element — see #vault-error below.
+//
+// When no vault is selected (HasVault false), the picker starts expanded
+// (x-data's initial "open" value), since Ticket 07 requires it be the
+// empty state's primary call to action, not a collapsed control the user
+// has to discover.
+var navTemplate = template.Must(template.New("nav").Parse(`<nav>
+<div class="vault-picker" x-data="{open: {{if .HasVault}}false{{else}}true{{end}}}">
+<button type="button" @click="open = !open">{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}} &#9662;</button>
+<div x-show="open">
+<ul>
+{{range .History}}<li><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error">{{.}}</button></li>
+{{end}}</ul>
+<div x-data="{adding: false}">
+<button type="button" @click="adding = !adding">Add new vault...</button>
+<template x-if="adding">
+<div>
+<input type="text" id="new-vault-path" name="path" placeholder="/path/to/vault">
+<button hx-put="/vault" hx-include="#new-vault-path" hx-swap="none" data-error-target="#vault-error">Switch</button>
+</div>
+</template>
+</div>
+</div>
+</div>
+<button hx-put="/theme" hx-vals='{"theme": "{{.NextTheme}}"}' hx-swap="none">{{if eq .Theme "dark"}}Light mode{{else}}Dark mode{{end}}</button>
+<span id="vault-error" role="alert"></span>
+</nav>`))
+
+type navView struct {
+	HasVault    bool
+	CurrentPath string
+	History     []string
+	Theme       string
+	NextTheme   string
+}
+
+func renderNav(av *activevault.ActiveVault) (template.HTML, error) {
+	path, _, _, _, hasVault := av.Snapshot()
+	theme := av.Theme()
+
+	s, err := settings.Load()
+	if err != nil {
+		return "", err
+	}
+
+	nextTheme := "dark"
+	if theme == "dark" {
+		nextTheme = "light"
+	}
+
+	return renderFragment(navTemplate, navView{
+		HasVault:    hasVault,
+		CurrentPath: path,
+		History:     s.VaultHistory,
+		Theme:       theme,
+		NextTheme:   nextTheme,
+	})
+}
+
+// render writes content wrapped in the full page layout (including the nav)
+// for a normal browser navigation, or just content on its own for an HTMX
+// request (identified by the HX-Request header) — the live-update script
+// above swaps the latter into #page-content without re-loading <head> or
+// the nav.
+func render(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault, title string, content template.HTML) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Header.Get("HX-Request") == "true" {
 		w.Write([]byte(content))
 		return
 	}
-	layoutTemplate.Execute(w, layoutView{Theme: theme, Title: title, Content: content})
+
+	nav, err := renderNav(av)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	layoutTemplate.Execute(w, layoutView{Theme: av.Theme(), Title: title, Content: content, Nav: nav})
 }
 
 func renderFragment(tmpl *template.Template, data any) (template.HTML, error) {
@@ -72,16 +180,18 @@ func renderFragment(tmpl *template.Template, data any) (template.HTML, error) {
 
 // noVaultSelectedTemplate is the fallback content for HTML routes when no
 // Active Vault is selected (a first-class, expected state — the server
-// boots into it and stays in it until the picker UI selects a vault).
+// boots into it and stays in it until the picker UI selects a vault). The
+// nav's own picker (rendered expanded in this state, see navTemplate) is
+// the primary call to action; this is just the content-area companion.
 var noVaultSelectedTemplate = template.Must(template.New("noVault").Parse(
 	`<p>No vault selected. Pick one to get started.</p>`))
 
 // noVaultSelected renders the "no vault selected" fallback for an HTML
 // route so a missing Active Vault never reaches a nil provider/store/state
 // and panics.
-func noVaultSelected(w http.ResponseWriter, r *http.Request, theme string) {
+func noVaultSelected(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault) {
 	content, _ := renderFragment(noVaultSelectedTemplate, nil)
-	render(w, r, theme, "No vault selected", content)
+	render(w, r, av, "No vault selected", content)
 }
 
 // noVaultSelectedJSON is the equivalent fallback for API routes.
@@ -118,7 +228,7 @@ type browseView struct {
 }
 
 // searchUITemplate renders a search form plus any matching results.
-var searchUITemplate = template.Must(template.New("searchUI").Parse(`<form hx-get="/search/ui" hx-target="body">
+var searchUITemplate = template.Must(template.New("searchUI").Parse(`<form hx-get="/search/ui" hx-target="#page-content">
 <input type="text" name="q" value="{{.Query}}">
 </form>
 <ul>
@@ -187,6 +297,50 @@ type switchThemeRequest struct {
 	Theme string `json:"theme"`
 }
 
+// parseVaultPath reads the "path" value from a PUT /vault request body.
+// Ticket 06 speced a JSON body ({"path": "..."}), but Ticket 07's picker UI
+// submits via plain htmx hx-vals/hx-include, which htmx sends form-encoded
+// (application/x-www-form-urlencoded) unless a separate JSON-encoding
+// extension is vendored — so this accepts either: a JSON body first, and if
+// that doesn't parse into a non-empty Path, falls back to treating the body
+// as form-encoded. Existing JSON API callers are unaffected.
+func parseVaultPath(r *http.Request) (string, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var req switchVaultRequest
+	if err := json.Unmarshal(body, &req); err == nil && req.Path != "" {
+		return req.Path, nil
+	}
+
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return "", fmt.Errorf("parsing request body: %w", err)
+	}
+	return values.Get("path"), nil
+}
+
+// parseTheme is parseVaultPath's counterpart for PUT /theme.
+func parseTheme(r *http.Request) (string, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var req switchThemeRequest
+	if err := json.Unmarshal(body, &req); err == nil && req.Theme != "" {
+		return req.Theme, nil
+	}
+
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return "", fmt.Errorf("parsing request body: %w", err)
+	}
+	return values.Get("theme"), nil
+}
+
 // New builds the http.Handler for a running instance. Every route reads the
 // Active Vault fresh per request via av.Snapshot()/av.Theme() rather than
 // closing over a vault/theme captured once at construction time, since
@@ -201,10 +355,9 @@ func New(av *activevault.ActiveVault) http.Handler {
 	mux.Handle("GET /js/", assets)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		theme := av.Theme()
 		_, _, _, s, ok := av.Snapshot()
 		if !ok {
-			noVaultSelected(w, r, theme)
+			noVaultSelected(w, r, av)
 			return
 		}
 
@@ -222,14 +375,13 @@ func New(av *activevault.ActiveVault) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, theme, "Browse", content)
+		render(w, r, av, "Browse", content)
 	})
 
 	mux.HandleFunc("GET /search/ui", func(w http.ResponseWriter, r *http.Request) {
-		theme := av.Theme()
 		_, _, _, s, ok := av.Snapshot()
 		if !ok {
-			noVaultSelected(w, r, theme)
+			noVaultSelected(w, r, av)
 			return
 		}
 
@@ -257,11 +409,11 @@ func New(av *activevault.ActiveVault) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, theme, "Search", content)
+		render(w, r, av, "Search", content)
 	})
 
 	mux.HandleFunc("GET /graph/ui", func(w http.ResponseWriter, r *http.Request) {
-		render(w, r, av.Theme(), "Graph", template.HTML(graphUITemplate))
+		render(w, r, av, "Graph", template.HTML(graphUITemplate))
 	})
 
 	// /events: an SSE connection subscribes to the currently active vault's
@@ -341,10 +493,9 @@ func New(av *activevault.ActiveVault) http.Handler {
 	})
 
 	mux.HandleFunc("GET /notes/{id...}", func(w http.ResponseWriter, r *http.Request) {
-		theme := av.Theme()
 		_, _, store, s, ok := av.Snapshot()
 		if !ok {
-			noVaultSelected(w, r, theme)
+			noVaultSelected(w, r, av)
 			return
 		}
 
@@ -379,7 +530,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, theme, note.Title, content)
+		render(w, r, av, note.Title, content)
 	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -542,14 +693,22 @@ func New(av *activevault.ActiveVault) http.Handler {
 	// No existing route in this table sets a precedent either way (all are
 	// GET), so this is a fresh choice, documented here rather than left
 	// implicit.
+	//
+	// On success, the response carries HX-Refresh: true rather than any
+	// content — the Ticket 07 picker's htmx triggers all set hx-swap="none"
+	// and rely on this header to make the browser do a full page reload,
+	// which re-renders both the nav (now reflecting the new vault/theme)
+	// and the content in one navigation, rather than trying to hand-swap a
+	// freshly rendered page fragment into place. A non-htmx/JSON API caller
+	// simply gets 200 with an empty body and can ignore the header.
 	mux.HandleFunc("PUT /vault", func(w http.ResponseWriter, r *http.Request) {
-		var req switchVaultRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		path, err := parseVaultPath(r)
+		if err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 
-		if err := av.Switch(req.Path); err != nil {
+		if err := av.Switch(path); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -567,28 +726,30 @@ func New(av *activevault.ActiveVault) http.Handler {
 			return
 		}
 
+		w.Header().Set("HX-Refresh", "true")
 		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("PUT /theme", func(w http.ResponseWriter, r *http.Request) {
-		var req switchThemeRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		theme, err := parseTheme(r)
+		if err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 
-		av.SetTheme(req.Theme)
+		av.SetTheme(theme)
 
 		saved, err := settings.Load()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := settings.Save(saved.WithTheme(req.Theme)); err != nil {
+		if err := settings.Save(saved.WithTheme(theme)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		w.Header().Set("HX-Refresh", "true")
 		w.WriteHeader(http.StatusOK)
 	})
 
