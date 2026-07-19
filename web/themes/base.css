@@ -73,24 +73,25 @@ code, .id-chip {
   padding: 0.05em 0.4em;
 }
 
-button, input[type="text"], input[type="submit"] {
+button, input[type="text"] {
   font-family: inherit;
   font-size: 0.95rem;
-}
-
-button {
   background: var(--surface);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+button {
   padding: var(--space-1) var(--space-3);
   cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease;
 }
 
 button:hover {
+  background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-fg);
 }
 
 button:active {
@@ -103,10 +104,6 @@ button:focus-visible, input:focus-visible {
 }
 
 input[type="text"] {
-  background: var(--surface);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: var(--space-1) var(--space-2);
   transition: border-color 120ms ease;
 }

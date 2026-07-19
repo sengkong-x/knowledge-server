@@ -210,7 +210,7 @@ var noteDetailTemplate = template.Must(template.New("note").Parse(`<h1>{{.Title}
 {{.Body}}
 {{if .Neighbors}}<h2>Related notes</h2>
 <ul>
-{{range .Neighbors}}<li><a href="/notes/{{.}}">{{.}}</a></li>
+{{range .Neighbors}}<li><a href="/notes/{{.}}" class="id-chip">{{.}}</a></li>
 {{end}}</ul>{{end}}`))
 
 type noteDetailView struct {
