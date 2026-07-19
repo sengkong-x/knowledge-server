@@ -1,0 +1,209 @@
+package activevault
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/sengkong/knowledge-server/internal/vaultfixture"
+)
+
+func setCacheHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+}
+
+const noteA = `---
+title: Note A
+created: 2026-07-12
+---
+Body A.
+`
+
+const noteB = `---
+title: Note B
+created: 2026-07-12
+---
+Body B.
+`
+
+// waitReconciled blocks until av's most recent Switch's background
+// reconciliation has finished, so tests can assert post-reconcile state
+// deterministically instead of racing a goroutine.
+func waitReconciled(t *testing.T, av *ActiveVault) {
+	t.Helper()
+	select {
+	case <-av.reconcileDone():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for reconcile to finish")
+	}
+}
+
+func TestSwitch_ToValidVaultSucceedsAndSnapshotReflectsIt(t *testing.T) {
+	setCacheHome(t)
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", noteA)
+
+	av := New("light")
+
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	path, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false, want true after a successful Switch")
+	}
+	if path == "" {
+		t.Error("Snapshot path is empty, want the canonicalized vault root")
+	}
+	if _, found := s.ByID("note-a"); !found {
+		t.Error(`ByID("note-a") not found, want the switched-in vault's notes indexed`)
+	}
+}
+
+func TestSwitch_ToInvalidPathLeavesOutgoingVaultUntouched(t *testing.T) {
+	setCacheHome(t)
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", noteA)
+
+	av := New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("initial Switch returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	badPath := filepath.Join(t.TempDir(), "does-not-exist")
+	if err := av.Switch(badPath); err == nil {
+		t.Fatal("Switch to a nonexistent path returned no error, want error")
+	}
+
+	path, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false after a failed Switch, want the previous vault to remain active")
+	}
+	if _, found := s.ByID("note-a"); !found {
+		t.Error(`ByID("note-a") not found after a failed Switch, want the previous vault untouched`)
+	}
+	_ = path
+}
+
+func TestSwitch_AToBToA_ReusesCachedEnginesForA(t *testing.T) {
+	setCacheHome(t)
+	rootA := t.TempDir()
+	vaultfixture.WriteNote(t, rootA, "note-a.md", noteA)
+	rootB := t.TempDir()
+	vaultfixture.WriteNote(t, rootB, "note-b.md", noteB)
+
+	av := New("light")
+
+	if err := av.Switch(rootA); err != nil {
+		t.Fatalf("Switch(A) returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	if err := av.Switch(rootB); err != nil {
+		t.Fatalf("Switch(B) returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	// Add a new note to A's vault on disk after leaving it. If switching
+	// back to A rebuilds from scratch, this note would be picked up
+	// immediately. If it instead loads A's persisted cache (written when we
+	// switched away from it above), the new note is absent until the
+	// background reconcile eventually catches it — so we assert on the
+	// state immediately after Switch returns, before waiting on reconcile.
+	vaultfixture.WriteNote(t, rootA, "note-a2.md", `---
+title: Note A2
+created: 2026-07-13
+---
+Body A2.
+`)
+
+	if err := av.Switch(rootA); err != nil {
+		t.Fatalf("Switch(A) again returned error: %v", err)
+	}
+
+	_, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false, want true")
+	}
+	if _, found := s.ByID("note-a2"); found {
+		t.Error(`ByID("note-a2") found immediately after Switch, want the cached (pre-addition) Index to have been loaded instead of a fresh Build`)
+	}
+	if _, found := s.ByID("note-a"); !found {
+		t.Error(`ByID("note-a") not found, want the cached entry for A present`)
+	}
+
+	waitReconciled(t, av)
+	if _, found := s.ByID("note-a2"); !found {
+		t.Error(`ByID("note-a2") not found after reconcile, want the background rescan to have caught the new note`)
+	}
+}
+
+func TestNew_NoVaultSelected_SnapshotReturnsNotOK(t *testing.T) {
+	av := New("light")
+
+	_, _, _, _, ok := av.Snapshot()
+	if ok {
+		t.Error("Snapshot ok = true with no vault selected, want false")
+	}
+}
+
+func TestThemeDefaultsAndCanBeSet(t *testing.T) {
+	av := New("dark")
+
+	if got := av.Theme(); got != "dark" {
+		t.Errorf("Theme() = %q, want %q", got, "dark")
+	}
+
+	av.SetTheme("light")
+	if got := av.Theme(); got != "light" {
+		t.Errorf("Theme() after SetTheme = %q, want %q", got, "light")
+	}
+}
+
+func TestSnapshot_ConcurrentWithSwitch_NoRace(t *testing.T) {
+	setCacheHome(t)
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", noteA)
+
+	av := New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("initial Switch returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			av.Snapshot()
+		}
+	}()
+
+	root2 := t.TempDir()
+	vaultfixture.WriteNote(t, root2, "note-b.md", noteB)
+	if err := av.Switch(root2); err != nil {
+		t.Fatalf("concurrent Switch returned error: %v", err)
+	}
+	<-done
+	waitReconciled(t, av)
+}
+
+func TestSwitch_LogsIndexBuildFailuresWithoutErroring(t *testing.T) {
+	setCacheHome(t)
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", noteA)
+	if err := os.WriteFile(filepath.Join(root, "broken.md"), []byte("no frontmatter"), 0o644); err != nil {
+		t.Fatalf("writing broken note: %v", err)
+	}
+
+	av := New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	waitReconciled(t, av)
+}

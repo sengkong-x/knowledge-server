@@ -6,16 +6,27 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/sengkong/knowledge-server/internal/engines"
-	"github.com/sengkong/knowledge-server/internal/notes"
+	"github.com/sengkong/knowledge-server/internal/activevault"
+	"github.com/sengkong/knowledge-server/internal/settings"
 	"github.com/sengkong/knowledge-server/internal/state"
 	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/internal/vaultfixture"
 )
+
+func setCacheHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+}
+
+func setConfigHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
 
 func newTestHandler(t *testing.T, root string) http.Handler {
 	t.Helper()
@@ -25,16 +36,18 @@ func newTestHandler(t *testing.T, root string) http.Handler {
 
 func newTestHandlerWithState(t *testing.T, root string) (http.Handler, *state.State) {
 	t.Helper()
-	provider := vault.NewLocalVaultProvider(root)
-	store := notes.NewVaultNoteStore(provider)
+	setCacheHome(t)
 
-	e, _, err := engines.Build(provider, store)
-	if err != nil {
-		t.Fatalf("engines.Build returned error: %v", err)
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
 	}
 
-	s := state.New(e)
-	return New(root, provider, store, s, "light"), s
+	_, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false after Switch")
+	}
+	return New(av), s
 }
 
 const clockNote = `---
@@ -44,14 +57,6 @@ created: 2026-07-12
 ---
 Combines physical time with a logical counter.
 `
-
-type fakeVaultProvider struct {
-	notes []vault.NoteRef
-}
-
-func (f *fakeVaultProvider) ListNotes() ([]vault.NoteRef, error)   { return f.notes, nil }
-func (f *fakeVaultProvider) ReadNote(id string) ([]byte, error)    { return nil, nil }
-func (f *fakeVaultProvider) ReadAsset(path string) ([]byte, error) { return nil, nil }
 
 func TestSearch_ReturnsMatchesForTextQuery(t *testing.T) {
 	root := t.TempDir()
@@ -773,18 +778,26 @@ func TestEvents_BroadcastsPingOnChange(t *testing.T) {
 }
 
 func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
-	provider := &fakeVaultProvider{notes: []vault.NoteRef{
-		{ID: "linux/process", Path: "linux/process.md"},
-		{ID: "database/wal", Path: "database/wal.md"},
-	}}
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "linux/process.md", `---
+title: Process
+created: 2026-07-12
+---
+Body.
+`)
+	vaultfixture.WriteNote(t, root, "database/wal.md", `---
+title: WAL
+created: 2026-07-12
+---
+Body.
+`)
 
-	store := notes.NewVaultNoteStore(provider)
-	e, _, err := engines.Build(provider, store)
+	handler := newTestHandler(t, root)
+
+	canonical, err := vault.CanonicalPath(root)
 	if err != nil {
-		t.Fatalf("engines.Build returned error: %v", err)
+		t.Fatalf("vault.CanonicalPath: %v", err)
 	}
-
-	handler := New("/srv/knowledge", provider, store, state.New(e), "light")
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -794,8 +807,431 @@ func TestHealth_ReturnsOKWithVaultPathAndNoteCount(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	wantBody := `{"vault_path":"/srv/knowledge","note_count":2}`
-	if rec.Body.String() != wantBody+"\n" && rec.Body.String() != wantBody {
-		t.Errorf("body = %q, want %q", rec.Body.String(), wantBody)
+	var got healthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if got.VaultPath != canonical {
+		t.Errorf("VaultPath = %q, want %q", got.VaultPath, canonical)
+	}
+	if got.NoteCount != 2 {
+		t.Errorf("NoteCount = %d, want 2", got.NoteCount)
+	}
+}
+
+func TestHealth_ReturnsEmptyWhenNoVaultSelected(t *testing.T) {
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got healthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if got.VaultPath != "" || got.NoteCount != 0 {
+		t.Errorf("got %+v, want zero-value healthResponse when no vault is selected", got)
+	}
+}
+
+func TestBrowse_RendersNoVaultSelectedWhenNoneIsActive(t *testing.T) {
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "No vault selected") {
+		t.Errorf("body = %q, want a no-vault-selected message, not a panic or empty page", rec.Body.String())
+	}
+}
+
+func TestNoteDetail_RendersNoVaultSelectedWhenNoneIsActive(t *testing.T) {
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/notes/anything", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "No vault selected") {
+		t.Errorf("body = %q, want a no-vault-selected message", rec.Body.String())
+	}
+}
+
+func TestSearch_ReturnsConflictJSONWhenNoVaultSelected(t *testing.T) {
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/search?q=anything", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if got["error"] == "" {
+		t.Errorf("got %+v, want a non-empty error message", got)
+	}
+}
+
+func TestGraphData_ReturnsConflictJSONWhenNoVaultSelected(t *testing.T) {
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/graph/data", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+}
+
+func TestAssets_ReturnsNotFoundWhenNoVaultSelected(t *testing.T) {
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/whatever.svg", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestSettings_ReturnsCurrentVaultThemeAndHistory(t *testing.T) {
+	setConfigHome(t)
+
+	av := activevault.New("dark")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var got settingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	// No PUT /vault or /theme has run yet in this test, so settings.json
+	// doesn't exist yet — Load() (Ticket 03) returns the zero value.
+	if got.VaultPath != "" || got.Theme != "" || len(got.VaultHistory) != 0 {
+		t.Errorf("got %+v, want zero-value settings before any switch/theme change", got)
+	}
+}
+
+func TestSwitchVault_SucceedsAndPersistsToSettings(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	body, err := json.Marshal(switchVaultRequest{Path: root})
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/vault", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	canonical, err := vault.CanonicalPath(root)
+	if err != nil {
+		t.Fatalf("vault.CanonicalPath: %v", err)
+	}
+
+	_, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false after PUT /vault, want the switch to have taken effect")
+	}
+	if _, found := s.ByID("note-a"); !found {
+		t.Error(`ByID("note-a") not found, want the switched-in vault's notes indexed`)
+	}
+
+	settingsReq := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	settingsRec := httptest.NewRecorder()
+	handler.ServeHTTP(settingsRec, settingsReq)
+
+	var gotSettings settingsResponse
+	if err := json.Unmarshal(settingsRec.Body.Bytes(), &gotSettings); err != nil {
+		t.Fatalf("unmarshaling settings response: %v", err)
+	}
+	if gotSettings.VaultPath != canonical {
+		t.Errorf("settings VaultPath = %q, want %q", gotSettings.VaultPath, canonical)
+	}
+}
+
+func TestSwitchVault_ValidationFailureLeavesPreviousVaultActiveAndSurfacesError(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("initial Switch returned error: %v", err)
+	}
+	handler := New(av)
+
+	badPath := filepath.Join(t.TempDir(), "does-not-exist")
+	body, err := json.Marshal(switchVaultRequest{Path: badPath})
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/vault", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+	if got["error"] == "" {
+		t.Error("got empty error message, want the validation failure surfaced for the picker UI")
+	}
+
+	_, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false, want the previous vault to remain untouched after a failed switch")
+	}
+	if _, found := s.ByID("note-a"); !found {
+		t.Error(`ByID("note-a") not found, want the previous vault's notes still present`)
+	}
+}
+
+func TestSwitchTheme_SetsThemeAndPersistsToSettings(t *testing.T) {
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	body, err := json.Marshal(switchThemeRequest{Theme: "dark"})
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/theme", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if got := av.Theme(); got != "dark" {
+		t.Errorf("av.Theme() = %q, want %q", got, "dark")
+	}
+
+	settingsReq := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	settingsRec := httptest.NewRecorder()
+	handler.ServeHTTP(settingsRec, settingsReq)
+
+	var gotSettings settingsResponse
+	if err := json.Unmarshal(settingsRec.Body.Bytes(), &gotSettings); err != nil {
+		t.Fatalf("unmarshaling settings response: %v", err)
+	}
+	if gotSettings.Theme != "dark" {
+		t.Errorf("settings Theme = %q, want %q", gotSettings.Theme, "dark")
+	}
+}
+
+// TestEvents_ClosesStreamOnVaultSwitch verifies the documented resolution
+// (see server.go's /events comment) for the edge case where an SSE
+// connection is open across a vault switch: rather than silently going
+// quiet (still subscribed to a State nobody will ever notify again), the
+// stream ends, and a real browser's EventSource auto-reconnects to pick up
+// the new vault's State.
+func TestEvents_ClosesStreamOnVaultSwitch(t *testing.T) {
+	setCacheHome(t)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("initial Switch returned error: %v", err)
+	}
+	handler := New(av)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/events")
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	root2 := t.TempDir()
+	vaultfixture.WriteNote(t, root2, "note-b.md", `---
+title: Note B
+created: 2026-07-12
+---
+Body.
+`)
+	if err := av.Switch(root2); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(resp.Body)
+		_, err := reader.ReadString('\n')
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("read from /events succeeded after a vault switch, want the stream to have closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for /events to close after a vault switch")
+	}
+}
+
+func TestBrowse_FullPageRenderIncludesNavWithVaultHistory(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	canonical, _, _, _, _ := av.Snapshot()
+	if err := settings.Save(settings.Settings{VaultPath: canonical, VaultHistory: []string{canonical, "/some/other/vault"}}); err != nil {
+		t.Fatalf("settings.Save: %v", err)
+	}
+
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "<nav>") {
+		t.Errorf("body = %q, want a <nav> element on a full page render", body)
+	}
+	if !strings.Contains(body, canonical) {
+		t.Errorf("body = %q, want the current vault path listed in the picker", body)
+	}
+	if !strings.Contains(body, "/some/other/vault") {
+		t.Errorf("body = %q, want vault history entries listed in the picker", body)
+	}
+	if !strings.Contains(body, `id="page-content"`) {
+		t.Errorf("body = %q, want a #page-content wrapper separate from the nav", body)
+	}
+}
+
+func TestBrowse_HTMXFragmentRenderExcludesNav(t *testing.T) {
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	handler := newTestHandler(t, root)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, "<nav>") {
+		t.Errorf("body = %q, want an HTMX fragment response to omit the nav (it survives swaps by not being re-sent)", body)
+	}
+}
+
+func TestNav_PickerExpandedByDefaultWhenNoVaultSelected(t *testing.T) {
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "open: true") {
+		t.Errorf("body = %q, want the picker's x-data to start expanded (open: true) when no vault is selected", body)
 	}
 }

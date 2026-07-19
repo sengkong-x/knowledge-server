@@ -1,6 +1,0 @@
-vault:
-  path: ./docs
-server:
-  port: 8081
-theme:
-  default: dark

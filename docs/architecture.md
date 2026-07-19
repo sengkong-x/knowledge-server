@@ -72,5 +72,6 @@ The cache is saved only on graceful shutdown (`SIGINT`/`SIGTERM`, handled in `cm
 - **`state`** — `State`: wraps `Engines` behind a single mutex so the Watcher (writer) and HTTP handlers (readers) can share them safely; also owns the SSE subscriber registry and change notifications.
 - **`watcher`** — `Watcher`: monitors the Vault for filesystem changes and drives debounced, incremental `Upsert`/`Remove` calls into its targets so they stay current without a full rebuild or server restart.
 - **`server`** — the HTTP layer: routes, HTML rendering (layout, note detail, browse, search UI, graph UI), the JSON API, and the `/events` SSE endpoint. Holds no business logic — it orchestrates `State`, `NoteStore`, and `VaultProvider`.
-- **`config`** — loads and validates `config.yaml` (Vault path with `~` expansion, server port, default theme).
+- **`settings`** — durable `~/.config/ks/settings.json` persistence (active vault path, theme, vault history), loaded at boot and written on every vault switch or theme change. Distinct from the disposable per-vault Engines cache.
+- **`activevault`** — `ActiveVault`: the single Vault subsystem (provider, store, `State`, `Watcher`) a running instance currently has open, and the switch orchestration (validate, save-and-discard the outgoing vault, load-or-build the incoming one, kick off a background staleness reconciliation) described in ADR-0011.
 - **`logger`** — `slog` setup used across the process.

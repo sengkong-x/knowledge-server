@@ -6,26 +6,37 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
+	"github.com/sengkong/knowledge-server/internal/activevault"
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
-	"github.com/sengkong/knowledge-server/internal/state"
-	"github.com/sengkong/knowledge-server/internal/vault"
+	"github.com/sengkong/knowledge-server/internal/settings"
 	"github.com/sengkong/knowledge-server/web"
 	"github.com/yuin/goldmark"
 )
 
 // layoutTemplate wraps a page's content in the full HTML document: theme
-// CSS (driven by config's theme.default, see ADR "theme support"), vendored
-// HTMX/Alpine.js, and a live-update script that reacts to the /events SSE
-// ping (ADR-0009) by re-fetching the current page's content in place.
+// CSS (driven by ActiveVault's current theme, switchable at runtime — see
+// ADR-0011), vendored HTMX/Alpine.js, the vault-picker nav (Ticket 07), and
+// a live-update script that reacts to the /events SSE ping (ADR-0009) by
+// re-fetching the current page's content in place.
+//
+// Page content lives inside #page-content, deliberately separate from
+// {{.Nav}}: every HTMX-driven update in this app (the SSE live-update
+// script below, searchUITemplate's form) targets #page-content rather than
+// <body>, specifically so the nav survives those swaps instead of being
+// wiped out by them — <body> previously had nothing else in it, so
+// targeting the whole body was harmless before this ticket added the nav.
 var layoutTemplate = template.Must(template.New("layout").Parse(`<!doctype html>
 <html data-theme="{{.Theme}}">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="/themes/base.css">
 <link rel="stylesheet" href="/themes/{{.Theme}}.css">
@@ -33,10 +44,25 @@ var layoutTemplate = template.Must(template.New("layout").Parse(`<!doctype html>
 <script src="/vendor/alpine.min.js" defer></script>
 </head>
 <body>
+{{.Nav}}
+<div id="page-content">
 {{.Content}}
+</div>
 <script>
+document.body.addEventListener("htmx:responseError", function (evt) {
+  var targetSel = evt.detail.elt.getAttribute("data-error-target");
+  if (!targetSel) return;
+  var el = document.querySelector(targetSel);
+  if (!el) return;
+  var message = "Request failed.";
+  try {
+    var body = JSON.parse(evt.detail.xhr.responseText);
+    if (body.error) message = body.error;
+  } catch (e) {}
+  el.textContent = message;
+});
 new EventSource("/events").onmessage = function () {
-  htmx.ajax("GET", window.location.pathname + window.location.search, {target: "body", swap: "innerHTML"});
+  htmx.ajax("GET", window.location.pathname + window.location.search, {target: "#page-content", swap: "innerHTML"});
 };
 </script>
 </body>
@@ -46,19 +72,138 @@ type layoutView struct {
 	Theme   string
 	Title   string
 	Content template.HTML
+	Nav     template.HTML
 }
 
-// render writes content wrapped in the full page layout for a normal
-// browser navigation, or just content on its own for an HTMX request
-// (identified by the HX-Request header) — the live-update script above
-// swaps the latter into <body> without re-loading <head>.
-func render(w http.ResponseWriter, r *http.Request, theme, title string, content template.HTML) {
+// The icon inner-paths below are each used at more than one size/context
+// across the templates in this file (e.g. the vault icon in both the nav
+// picker and the empty state), so they're named constants rather than
+// inline markup repeated verbatim at each call site.
+const (
+	iconPathBook   = `<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>`
+	iconPathVault  = `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>`
+	iconPathSearch = `<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>`
+)
+
+// svgIcon renders an inline SVG icon at the given size and stroke weight —
+// a shared shape for every icon in this file's templates rather than
+// duplicating the surrounding <svg> attributes at each call site.
+func svgIcon(size int, strokeWidth, innerPath string) template.HTML {
+	return template.HTML(fmt.Sprintf(
+		`<svg width="%d" height="%d" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="%s" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">%s</svg>`,
+		size, size, strokeWidth, innerPath))
+}
+
+// navTemplate is the vault-picker + theme-toggle chrome shown on every
+// page (there was no nav anywhere before this ticket). The picker lists
+// VaultHistory (from GET /settings) as switch triggers, plus an "Add new
+// vault..." toggle revealing a free-text path input — an Alpine x-data
+// dropdown, since Alpine's already vendored for exactly this kind of small
+// interactive widget (see web/vendor/alpine.min.js).
+//
+// Every action here (hx-put="/vault", hx-put="/theme") sets hx-swap="none"
+// and relies on the server setting an HX-Refresh response header on
+// success (see the PUT /vault and PUT /theme handlers below) to trigger a
+// full page reload — simpler and more correct than trying to swap in a
+// freshly rendered page fragment, and it naturally re-renders both the nav
+// (now reflecting the new vault/theme) and the content in one browser
+// navigation. On failure (no HX-Refresh header, a JSON error body instead),
+// the htmx:responseError listener in layoutTemplate reads the triggering
+// element's data-error-target attribute and writes the error message into
+// that element — see #vault-error below.
+//
+// When no vault is selected (HasVault false), the picker starts expanded
+// (x-data's initial "open" value), since Ticket 07 requires it be the
+// empty state's primary call to action, not a collapsed control the user
+// has to discover.
+var navTemplate = template.Must(template.New("nav").Parse(`<nav>
+<div class="nav-start">
+<span class="brand">` + string(svgIcon(20, "2", iconPathBook)) + ` Knowledge Server</span>
+<ul class="nav-links">
+<li><a href="/" class="{{if eq .Active "browse"}}active{{end}}">Browse</a></li>
+<li><a href="/search/ui" class="{{if eq .Active "search"}}active{{end}}">Search</a></li>
+<li><a href="/graph/ui" class="{{if eq .Active "graph"}}active{{end}}">Graph</a></li>
+</ul>
+</div>
+<div class="nav-end">
+<div class="vault-picker" x-data="{open: {{if .HasVault}}false{{else}}true{{end}}}">
+<button type="button" @click="open = !open" class="id-chip" aria-haspopup="true" :aria-expanded="open">
+` + string(svgIcon(14, "2", iconPathVault)) + `
+<span>{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}}</span>
+<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+</button>
+<div x-show="open" x-transition>
+<ul>
+{{range .History}}<li><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="id-chip">{{.}}</button></li>
+{{end}}</ul>
+<div x-data="{adding: false}">
+<button type="button" @click="adding = !adding">Add new vault&hellip;</button>
+<div x-show="adding">
+<input type="text" id="new-vault-path" name="path" placeholder="/path/to/vault">
+<button hx-put="/vault" hx-include="#new-vault-path" hx-swap="none" data-error-target="#vault-error">Switch</button>
+</div>
+</div>
+</div>
+</div>
+<button class="icon-button" hx-put="/theme" hx-vals='{"theme": "{{.NextTheme}}"}' hx-swap="none" aria-label="{{if eq .Theme "dark"}}Switch to light mode{{else}}Switch to dark mode{{end}}">
+{{if eq .Theme "dark"}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>{{else}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>{{end}}
+</button>
+</div>
+<span id="vault-error" role="alert"></span>
+</nav>`))
+
+type navView struct {
+	HasVault    bool
+	CurrentPath string
+	History     []string
+	Theme       string
+	NextTheme   string
+	Active      string
+}
+
+func renderNav(av *activevault.ActiveVault, active string) (template.HTML, error) {
+	path, _, _, _, hasVault := av.Snapshot()
+	theme := av.Theme()
+
+	s, err := settings.Load()
+	if err != nil {
+		return "", err
+	}
+
+	nextTheme := "dark"
+	if theme == "dark" {
+		nextTheme = "light"
+	}
+
+	return renderFragment(navTemplate, navView{
+		HasVault:    hasVault,
+		CurrentPath: path,
+		History:     s.VaultHistory,
+		Theme:       theme,
+		NextTheme:   nextTheme,
+		Active:      active,
+	})
+}
+
+// render writes content wrapped in the full page layout (including the nav)
+// for a normal browser navigation, or just content on its own for an HTMX
+// request (identified by the HX-Request header) — the live-update script
+// above swaps the latter into #page-content without re-loading <head> or
+// the nav.
+func render(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault, title string, content template.HTML, active string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Header.Get("HX-Request") == "true" {
 		w.Write([]byte(content))
 		return
 	}
-	layoutTemplate.Execute(w, layoutView{Theme: theme, Title: title, Content: content})
+
+	nav, err := renderNav(av, active)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	layoutTemplate.Execute(w, layoutView{Theme: av.Theme(), Title: title, Content: content, Nav: nav})
 }
 
 func renderFragment(tmpl *template.Template, data any) (template.HTML, error) {
@@ -69,16 +214,45 @@ func renderFragment(tmpl *template.Template, data any) (template.HTML, error) {
 	return template.HTML(buf.String()), nil
 }
 
+// noVaultSelectedTemplate is the fallback content for HTML routes when no
+// Active Vault is selected (a first-class, expected state — the server
+// boots into it and stays in it until the picker UI selects a vault). The
+// nav's own picker (rendered expanded in this state, see navTemplate) is
+// the primary call to action; this is just the content-area companion.
+var noVaultSelectedTemplate = template.Must(template.New("noVault").Parse(`<div class="empty-state">
+` + string(svgIcon(40, "1.5", iconPathVault)) + `
+<p>No vault selected.</p>
+<p>Pick one from the vault picker above to get started.</p>
+</div>`))
+
+// noVaultSelected renders the "no vault selected" fallback for an HTML
+// route so a missing Active Vault never reaches a nil provider/store/state
+// and panics.
+func noVaultSelected(w http.ResponseWriter, r *http.Request, av *activevault.ActiveVault) {
+	content, _ := renderFragment(noVaultSelectedTemplate, nil)
+	render(w, r, av, "No vault selected", content, "")
+}
+
+// noVaultSelectedJSON is the equivalent fallback for API routes.
+func noVaultSelectedJSON(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	json.NewEncoder(w).Encode(map[string]string{"error": "no vault selected"})
+}
+
 // noteDetailTemplate renders a note's title, goldmark-rendered body, and its
 // Graph neighbors as related-note links. Body is produced by goldmark from
 // trusted, locally-authored Vault content and is intentionally not escaped
 // further; Title and Neighbors are escaped normally.
-var noteDetailTemplate = template.Must(template.New("note").Parse(`<h1>{{.Title}}</h1>
+var noteDetailTemplate = template.Must(template.New("note").Parse(`<article class="note">
+<a href="/">&larr; Back to browse</a>
+<h1>{{.Title}}</h1>
 {{.Body}}
 {{if .Neighbors}}<h2>Related notes</h2>
 <ul>
-{{range .Neighbors}}<li><a href="/notes/{{.}}">{{.}}</a></li>
-{{end}}</ul>{{end}}`))
+{{range .Neighbors}}<li><a href="/notes/{{.}}" class="id-chip">{{.}}</a></li>
+{{end}}</ul>{{end}}
+</article>`))
 
 type noteDetailView struct {
 	Title     string
@@ -86,22 +260,40 @@ type noteDetailView struct {
 	Neighbors []string
 }
 
-// browseTemplate lists notes as links to their detail page.
-var browseTemplate = template.Must(template.New("browse").Parse(`<ul>
-{{range .Entries}}<li><a href="/notes/{{.ID}}">{{.Title}}</a></li>
-{{end}}</ul>`))
+// browseTemplate lists notes as links to their detail page. Each entry's ID
+// renders as a monospace "id-chip" (base.css) — a call-number-style
+// signature carried through everywhere a note ID/vault path appears in this
+// design, not just here.
+var browseTemplate = template.Must(template.New("browse").Parse(`<h1>Browse</h1>
+{{if .Entries}}<ul class="entry-list">
+{{range .Entries}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
+<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+</li>
+{{end}}</ul>{{else}}<div class="empty-state">
+` + string(svgIcon(40, "1.5", iconPathBook)) + `
+<p>This vault has no notes yet.</p>
+</div>{{end}}`))
 
 type browseView struct {
 	Entries []index.IndexEntry
 }
 
 // searchUITemplate renders a search form plus any matching results.
-var searchUITemplate = template.Must(template.New("searchUI").Parse(`<form hx-get="/search/ui" hx-target="body">
-<input type="text" name="q" value="{{.Query}}">
+var searchUITemplate = template.Must(template.New("searchUI").Parse(`<h1>Search</h1>
+<form hx-get="/search/ui" hx-target="#page-content" class="search-bar">
+` + string(svgIcon(16, "2", iconPathSearch)) + `
+<input type="text" name="q" value="{{.Query}}" placeholder="Search notes..." aria-label="Search notes" autofocus>
+<button type="submit">Search</button>
 </form>
-<ul>
-{{range .Results}}<li><a href="/notes/{{.ID}}">{{.Title}}</a></li>
-{{end}}</ul>`))
+{{if .Results}}<ul class="entry-list">
+{{range .Results}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
+{{if .Snippet}}<p class="entry-card-snippet">{{.Snippet}}</p>{{end}}
+<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+</li>
+{{end}}</ul>{{else if .Query}}<div class="empty-state">
+` + string(svgIcon(40, "1.5", iconPathSearch)) + `
+<p>No notes match &ldquo;{{.Query}}&rdquo;.</p>
+</div>{{end}}`))
 
 type searchUIView struct {
 	Query   string
@@ -112,7 +304,11 @@ type searchUIView struct {
 // itself and the script that fetches /graph/data into it are vendored
 // frontend assets (see ADR-0007's companion asset-vendoring deliverable),
 // not written here.
-const graphUITemplate = `<div id="cy"></div>
+const graphUITemplate = `<div class="graph-panel-header">
+<h1>Graph</h1>
+<p>Notes linked by <code>related</code>, laid out by connectivity.</p>
+</div>
+<div id="cy"></div>
 <script src="/vendor/cytoscape.min.js"></script>
 <script src="/js/graph.js" data-source="/graph/data"></script>`
 
@@ -151,11 +347,70 @@ type graphDataResponse struct {
 	Nodes []graphNodeResponse `json:"nodes"`
 }
 
-func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, s *state.State, theme string) http.Handler {
-	if theme == "" {
-		theme = "light"
+type settingsResponse struct {
+	VaultPath    string   `json:"vault_path"`
+	Theme        string   `json:"theme"`
+	VaultHistory []string `json:"vault_history"`
+}
+
+type switchVaultRequest struct {
+	Path string `json:"path"`
+}
+
+type switchThemeRequest struct {
+	Theme string `json:"theme"`
+}
+
+// parseVaultPath reads the "path" value from a PUT /vault request body.
+// Ticket 06 speced a JSON body ({"path": "..."}), but Ticket 07's picker UI
+// submits via plain htmx hx-vals/hx-include, which htmx sends form-encoded
+// (application/x-www-form-urlencoded) unless a separate JSON-encoding
+// extension is vendored — so this accepts either: a JSON body first, and if
+// that doesn't parse into a non-empty Path, falls back to treating the body
+// as form-encoded. Existing JSON API callers are unaffected.
+func parseVaultPath(r *http.Request) (string, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", err
 	}
 
+	var req switchVaultRequest
+	if err := json.Unmarshal(body, &req); err == nil && req.Path != "" {
+		return req.Path, nil
+	}
+
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return "", fmt.Errorf("parsing request body: %w", err)
+	}
+	return values.Get("path"), nil
+}
+
+// parseTheme is parseVaultPath's counterpart for PUT /theme.
+func parseTheme(r *http.Request) (string, error) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var req switchThemeRequest
+	if err := json.Unmarshal(body, &req); err == nil && req.Theme != "" {
+		return req.Theme, nil
+	}
+
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return "", fmt.Errorf("parsing request body: %w", err)
+	}
+	return values.Get("theme"), nil
+}
+
+// New builds the http.Handler for a running instance. Every route reads the
+// Active Vault fresh per request via av.Snapshot()/av.Theme() rather than
+// closing over a vault/theme captured once at construction time, since
+// ADR-0011 lets av.Switch/SetTheme change what's active at any point in the
+// server's lifetime.
+func New(av *activevault.ActiveVault) http.Handler {
 	mux := http.NewServeMux()
 
 	assets := http.FileServerFS(web.FS)
@@ -164,6 +419,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	mux.Handle("GET /js/", assets)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelected(w, r, av)
+			return
+		}
+
 		tag := r.URL.Query().Get("tag")
 
 		var entries []index.IndexEntry
@@ -178,10 +439,16 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, theme, "Browse", content)
+		render(w, r, av, "Browse", content, "browse")
 	})
 
 	mux.HandleFunc("GET /search/ui", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelected(w, r, av)
+			return
+		}
+
 		q := r.URL.Query().Get("q")
 
 		var results []searchResultResponse
@@ -206,13 +473,25 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, theme, "Search", content)
+		render(w, r, av, "Search", content, "search")
 	})
 
 	mux.HandleFunc("GET /graph/ui", func(w http.ResponseWriter, r *http.Request) {
-		render(w, r, theme, "Graph", template.HTML(graphUITemplate))
+		render(w, r, av, "Graph", template.HTML(graphUITemplate), "graph")
 	})
 
+	// /events: an SSE connection subscribes to the currently active vault's
+	// State for content-change pings (ADR-0009). A vault switch discards
+	// that State and swaps in a new one (Ticket 05), which would otherwise
+	// leave any already-open /events connection subscribed to a State
+	// nobody will ever notify again — a silent "stops updating" gap rather
+	// than a visible failure. Resolution (deliberately chosen over the
+	// alternative of leaving it silently stale): also subscribe to
+	// av.SubscribeSwitch(), and end the stream the moment a switch happens.
+	// The browser's EventSource auto-reconnects on a closed connection,
+	// which re-runs this handler, re-Snapshots, and subscribes fresh to the
+	// new State — so a switch costs one reconnect, not a silently stopped
+	// feed.
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -220,8 +499,17 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			return
 		}
 
-		ch, unsubscribe := s.Subscribe()
-		defer unsubscribe()
+		_, _, _, s, hasVault := av.Snapshot()
+
+		var stateCh <-chan struct{}
+		unsubState := func() {}
+		if hasVault {
+			stateCh, unsubState = s.Subscribe()
+		}
+		defer unsubState()
+
+		switchCh, unsubSwitch := av.SubscribeSwitch()
+		defer unsubSwitch()
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -233,7 +521,9 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			select {
 			case <-r.Context().Done():
 				return
-			case <-ch:
+			case <-switchCh:
+				return
+			case <-stateCh:
 				// Generic "something changed" ping, no per-note payload
 				// (see ADR-0009) — every listening view re-fetches its own
 				// current content rather than reasoning about what changed.
@@ -250,6 +540,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 		// VaultProvider.ReadAsset rejects any escape of the Vault root on
 		// its own behalf, since it's the abstraction that owns filesystem
 		// safety, not this transport-layer handler.
+		_, provider, _, _, ok := av.Snapshot()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+
 		reqPath := r.PathValue("path")
 
 		data, err := provider.ReadAsset(reqPath)
@@ -261,6 +557,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /notes/{id...}", func(w http.ResponseWriter, r *http.Request) {
+		_, _, store, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelected(w, r, av)
+			return
+		}
+
 		id := r.PathValue("id")
 		note, err := store.Load(id)
 		if err != nil {
@@ -292,24 +594,37 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, r, theme, note.Title, content)
+		render(w, r, av, note.Title, content, "")
 	})
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		path, provider, _, _, ok := av.Snapshot()
+
+		w.Header().Set("Content-Type", "application/json")
+		if !ok {
+			json.NewEncoder(w).Encode(healthResponse{})
+			return
+		}
+
 		notes, err := provider.ListNotes()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(healthResponse{
-			VaultPath: vaultPath,
+			VaultPath: path,
 			NoteCount: len(notes),
 		})
 	})
 
 	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		q := r.URL.Query().Get("q")
 		tag := r.URL.Query().Get("tag")
 		if q == "" && tag == "" {
@@ -352,6 +667,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/neighbors", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		id := r.URL.Query().Get("id")
 		neighbors, err := s.Neighbors(id)
 		if err != nil {
@@ -364,6 +685,12 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/path", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		from := r.URL.Query().Get("from")
 		to := r.URL.Query().Get("to")
 		path, found, err := s.ShortestPath(from, to)
@@ -377,11 +704,23 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 	})
 
 	mux.HandleFunc("GET /graph/orphans", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(orphansResponse{Orphans: s.Orphans()})
 	})
 
 	mux.HandleFunc("GET /graph/data", func(w http.ResponseWriter, r *http.Request) {
+		_, _, _, s, ok := av.Snapshot()
+		if !ok {
+			noVaultSelectedJSON(w)
+			return
+		}
+
 		entries := s.GraphAll()
 		nodes := make([]graphNodeResponse, 0, len(entries))
 		for _, entry := range entries {
@@ -395,6 +734,87 @@ func New(vaultPath string, provider vault.VaultProvider, store notes.NoteStore, 
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(graphDataResponse{Nodes: nodes})
+	})
+
+	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) {
+		s, err := settings.Load()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(settingsResponse{
+			VaultPath:    s.VaultPath,
+			Theme:        s.Theme,
+			VaultHistory: s.VaultHistory,
+		})
+	})
+
+	// PUT, not POST: switching the vault sets the one current selection
+	// (an idempotent "this is now the active vault" state change) rather
+	// than creating a new resource — same reasoning for PUT /theme below.
+	// No existing route in this table sets a precedent either way (all are
+	// GET), so this is a fresh choice, documented here rather than left
+	// implicit.
+	//
+	// On success, the response carries HX-Refresh: true rather than any
+	// content — the Ticket 07 picker's htmx triggers all set hx-swap="none"
+	// and rely on this header to make the browser do a full page reload,
+	// which re-renders both the nav (now reflecting the new vault/theme)
+	// and the content in one navigation, rather than trying to hand-swap a
+	// freshly rendered page fragment into place. A non-htmx/JSON API caller
+	// simply gets 200 with an empty body and can ignore the header.
+	mux.HandleFunc("PUT /vault", func(w http.ResponseWriter, r *http.Request) {
+		path, err := parseVaultPath(r)
+		if err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := av.Switch(path); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		canonical, _, _, _, _ := av.Snapshot()
+		saved, err := settings.Load()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := settings.Save(saved.WithVault(canonical)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("HX-Refresh", "true")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("PUT /theme", func(w http.ResponseWriter, r *http.Request) {
+		theme, err := parseTheme(r)
+		if err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		av.SetTheme(theme)
+
+		saved, err := settings.Load()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := settings.Save(saved.WithTheme(theme)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("HX-Refresh", "true")
+		w.WriteHeader(http.StatusOK)
 	})
 
 	return mux
