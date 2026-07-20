@@ -6,5 +6,5 @@ package web
 
 import "embed"
 
-//go:embed vendor themes js
+//go:embed vendor themes js fonts
 var FS embed.FS

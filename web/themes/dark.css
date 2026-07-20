@@ -9,5 +9,13 @@
   --accent: #6fb3c4;
   --accent-fg: #0f1416;
   --radius: 10px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-resting: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --shadow: 0 6px 16px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  --tag-0-bg: #17293c; --tag-0-fg: #7fb2e0;
+  --tag-1-bg: #241c3a; --tag-1-fg: #b79bef;
+  --tag-2-bg: #382c12; --tag-2-fg: #e0b565;
+  --tag-3-bg: #3a1b21; --tag-3-fg: #e08a9c;
+  --tag-4-bg: #16301f; --tag-4-fg: #7ed69a;
+  --tag-5-bg: #232a2e; --tag-5-fg: #9b968c;
 }
