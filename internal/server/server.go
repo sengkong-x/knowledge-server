@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"html/template"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/sengkong/knowledge-server/internal/index"
 	"github.com/sengkong/knowledge-server/internal/notes"
 	"github.com/sengkong/knowledge-server/internal/settings"
+	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/web"
 	"github.com/yuin/goldmark"
 )
@@ -83,6 +87,10 @@ const (
 	iconPathBook   = `<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>`
 	iconPathVault  = `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>`
 	iconPathSearch = `<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>`
+	iconPathCheck  = `<path d="M20 6 9 17l-5-5"/>`
+	iconPathPlus   = `<path d="M12 5v14M5 12h14"/>`
+	iconPathClose  = `<path d="M18 6 6 18M6 6l12 12"/>`
+	iconPathEdit   = `<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>`
 )
 
 // svgIcon renders an inline SVG icon at the given size and stroke weight —
@@ -92,6 +100,58 @@ func svgIcon(size int, strokeWidth, innerPath string) template.HTML {
 	return template.HTML(fmt.Sprintf(
 		`<svg width="%d" height="%d" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="%s" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">%s</svg>`,
 		size, size, strokeWidth, innerPath))
+}
+
+// pathLabel is the short, scannable form of a Vault path shown in the nav —
+// its parent directory name rather than the full absolute path, which reads
+// as debug output when dumped verbatim into chrome. The full path is still
+// available via each element's title attribute for anyone who needs it.
+func pathLabel(path string) string {
+	base := filepath.Base(path)
+	if base == "." || base == string(filepath.Separator) {
+		return path
+	}
+	return base
+}
+
+// tagHue is one of tagColorClasses hue buckets a tag's chip color is hashed
+// into (see hueOf) — a named type rather than a bare int, since it stands
+// for "which of the six tag colors", not an arbitrary number.
+type tagHue int
+
+// tagColorClasses is the number of hue buckets tags are hashed into (see
+// hueOf) — matched by the .tag-0..tag-{{tagColorClasses-1}} rules in
+// base.css/light.css/dark.css.
+const tagColorClasses tagHue = 6
+
+// hueOf hashes a tag name to one of tagColorClasses buckets so the same tag
+// always renders in the same hue across pages, without maintaining an
+// explicit tag->color registry as new tags get added to notes.
+func hueOf(tag string) tagHue {
+	h := fnv.New32a()
+	h.Write([]byte(tag))
+	return tagHue(h.Sum32() % uint32(tagColorClasses))
+}
+
+// renderTags renders each tag as a hue-colored chip — shared by the browse
+// and search result cards rather than each duplicating the same
+// range-and-hash markup shape.
+func renderTags(tags []string) template.HTML {
+	var buf bytes.Buffer
+	for _, t := range tags {
+		fmt.Fprintf(&buf, `<span class="tag tag-%d">%s</span>`, hueOf(t), template.HTMLEscapeString(t))
+	}
+	return template.HTML(buf.String())
+}
+
+// pluralCount renders "N noun" or "N nouns" — the shared shape behind the
+// browse and search page-meta lines, which otherwise differ (one names a
+// vault, the other a query) too much to share a whole template snippet.
+func pluralCount(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // navTemplate is the vault-picker + theme-toggle chrome shown on every
@@ -116,7 +176,7 @@ func svgIcon(size int, strokeWidth, innerPath string) template.HTML {
 // (x-data's initial "open" value), since Ticket 07 requires it be the
 // empty state's primary call to action, not a collapsed control the user
 // has to discover.
-var navTemplate = template.Must(template.New("nav").Parse(`<nav>
+var navTemplate = template.Must(template.New("nav").Funcs(template.FuncMap{"base": pathLabel}).Parse(`<nav>
 <div class="nav-start">
 <span class="brand">` + string(svgIcon(20, "2", iconPathBook)) + ` Knowledge Server</span>
 <ul class="nav-links">
@@ -127,29 +187,50 @@ var navTemplate = template.Must(template.New("nav").Parse(`<nav>
 </div>
 <div class="nav-end">
 <div class="vault-picker" x-data="{open: {{if .HasVault}}false{{else}}true{{end}}}">
-<button type="button" @click="open = !open" class="id-chip" aria-haspopup="true" :aria-expanded="open">
+<button type="button" @click="open = !open" class="id-chip" aria-haspopup="true" :aria-expanded="open" {{if .HasVault}}title="{{.CurrentPath}}"{{end}}>
 ` + string(svgIcon(14, "2", iconPathVault)) + `
-<span>{{if .HasVault}}{{.CurrentPath}}{{else}}No vault selected{{end}}</span>
+<span>{{if .HasVault}}{{base .CurrentPath}}{{else}}No vault selected{{end}}</span>
 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
 </button>
 <div x-show="open" x-transition>
+<p class="vault-menu-label">Switch vault</p>
 <ul>
-{{range .History}}<li><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="id-chip">{{.}}</button></li>
+{{$current := .CurrentPath}}{{range .History}}<li class="vault-item-row"><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="vault-item{{if eq . $current}} vault-item-active{{end}}" title="{{.}}">` + string(svgIcon(15, "2", iconPathVault)) + `<span>{{base .}}</span>{{if eq . $current}}` + string(svgIcon(15, "2", iconPathCheck)) + `{{end}}</button><button type="button" hx-delete="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="vault-item-remove" aria-label="Remove {{base .}} from vault history" title="Remove from history">` + string(svgIcon(13, "2", iconPathClose)) + `</button></li>
 {{end}}</ul>
-<div x-data="{adding: false}">
-<button type="button" @click="adding = !adding">Add new vault&hellip;</button>
-<div x-show="adding">
-<input type="text" id="new-vault-path" name="path" placeholder="/path/to/vault">
-<button hx-put="/vault" hx-include="#new-vault-path" hx-swap="none" data-error-target="#vault-error">Switch</button>
+<div x-data="vaultBrowser()">
+<button type="button" @click="openModal()" class="vault-item">` + string(svgIcon(15, "2", iconPathPlus)) + `<span>Add new vault&hellip;</span></button>
+<template x-teleport="body">
+<div x-show="open" x-cloak class="vault-browser-modal" @keydown.escape.window="closeModal()" @click.self="closeModal()">
+<div class="vault-browser-panel" role="dialog" aria-modal="true" aria-label="Add new vault">
+<div class="vault-browser-breadcrumb">
+<nav class="vault-browser-path-segments" x-show="!editingPath" aria-label="Current path">
+<template x-for="seg in segments" :key="seg.path">
+<span class="vault-browser-path-segment-wrap"><button type="button" @click="load(seg.path)" x-text="seg.name" class="vault-browser-path-segment"></button><span class="vault-browser-path-sep" x-show="!seg.last">/</span></span>
+</template>
+</nav>
+<input type="text" x-show="editingPath" x-model="pathInput" @keydown.enter="jumpTo(pathInput)" @blur="editingPath = false" class="vault-browser-path-input" aria-label="Vault path">
+<button type="button" class="icon-button" x-show="!editingPath" @click="startEditingPath()" aria-label="Type a path directly" title="Type a path directly">` + string(svgIcon(14, "2", iconPathEdit)) + `</button>
+<button type="button" class="button-primary" @click="useFolder()" :disabled="pending">Use this folder</button>
+</div>
+<ul class="vault-browser-list">
+<template x-for="dir in directories" :key="dir">
+<li><button type="button" @click="navigate(dir)">` + string(svgIcon(14, "2", iconPathVault)) + `<span x-text="dir"></span></button></li>
+</template>
+<template x-if="!pending && directories.length === 0"><li class="vault-browser-empty">No subfolders here.</li></template>
+</ul>
+<p class="vault-browser-error" x-show="error" x-text="error" role="alert"></p>
+</div>
+</div>
+</template>
 </div>
 </div>
 </div>
-</div>
+<script src="/js/vault-browser.js"></script>
 <button class="icon-button" hx-put="/theme" hx-vals='{"theme": "{{.NextTheme}}"}' hx-swap="none" aria-label="{{if eq .Theme "dark"}}Switch to light mode{{else}}Switch to dark mode{{end}}">
 {{if eq .Theme "dark"}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>{{else}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>{{end}}
 </button>
-</div>
 <span id="vault-error" role="alert"></span>
+</div>
 </nav>`))
 
 type navView struct {
@@ -264,10 +345,11 @@ type noteDetailView struct {
 // renders as a monospace "id-chip" (base.css) — a call-number-style
 // signature carried through everywhere a note ID/vault path appears in this
 // design, not just here.
-var browseTemplate = template.Must(template.New("browse").Parse(`<h1>Browse</h1>
-{{if .Entries}}<ul class="entry-list">
+var browseTemplate = template.Must(template.New("browse").Funcs(template.FuncMap{"tags": renderTags, "pluralCount": pluralCount}).Parse(`<h1>Browse</h1>
+{{if .Entries}}<p class="page-meta">{{pluralCount (len .Entries) "note"}} in <span class="id-chip">{{.VaultLabel}}</span></p>
+<ul class="entry-list">
 {{range .Entries}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
-<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{tags .Tags}}</div>
 </li>
 {{end}}</ul>{{else}}<div class="empty-state">
 ` + string(svgIcon(40, "1.5", iconPathBook)) + `
@@ -275,20 +357,22 @@ var browseTemplate = template.Must(template.New("browse").Parse(`<h1>Browse</h1>
 </div>{{end}}`))
 
 type browseView struct {
-	Entries []index.IndexEntry
+	Entries    []index.IndexEntry
+	VaultLabel string
 }
 
 // searchUITemplate renders a search form plus any matching results.
-var searchUITemplate = template.Must(template.New("searchUI").Parse(`<h1>Search</h1>
+var searchUITemplate = template.Must(template.New("searchUI").Funcs(template.FuncMap{"tags": renderTags, "pluralCount": pluralCount}).Parse(`<h1>Search</h1>
 <form hx-get="/search/ui" hx-target="#page-content" class="search-bar">
 ` + string(svgIcon(16, "2", iconPathSearch)) + `
 <input type="text" name="q" value="{{.Query}}" placeholder="Search notes..." aria-label="Search notes" autofocus>
-<button type="submit">Search</button>
+<button type="submit" class="button-primary">Search</button>
 </form>
-{{if .Results}}<ul class="entry-list">
+{{if .Results}}<p class="page-meta">{{pluralCount (len .Results) "result"}} for &ldquo;{{.Query}}&rdquo;</p>
+<ul class="entry-list">
 {{range .Results}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
 {{if .Snippet}}<p class="entry-card-snippet">{{.Snippet}}</p>{{end}}
-<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{range .Tags}}<span class="tag">{{.}}</span>{{end}}</div>
+<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{tags .Tags}}</div>
 </li>
 {{end}}</ul>{{else if .Query}}<div class="empty-state">
 ` + string(svgIcon(40, "1.5", iconPathSearch)) + `
@@ -353,6 +437,11 @@ type settingsResponse struct {
 	VaultHistory []string `json:"vault_history"`
 }
 
+type browseDirectoriesResponse struct {
+	Path        string   `json:"path"`
+	Directories []string `json:"directories"`
+}
+
 type switchVaultRequest struct {
 	Path string `json:"path"`
 }
@@ -386,6 +475,17 @@ func parseVaultPath(r *http.Request) (string, error) {
 	return values.Get("path"), nil
 }
 
+// updateSettings loads the current settings, applies with to them, and
+// saves the result — the load-mutate-save shape shared by every handler
+// that persists a Settings change (PUT/DELETE /vault, PUT /theme).
+func updateSettings(with func(settings.Settings) settings.Settings) error {
+	saved, err := settings.Load()
+	if err != nil {
+		return err
+	}
+	return settings.Save(with(saved))
+}
+
 // parseTheme is parseVaultPath's counterpart for PUT /theme.
 func parseTheme(r *http.Request) (string, error) {
 	body, err := io.ReadAll(r.Body)
@@ -417,9 +517,10 @@ func New(av *activevault.ActiveVault) http.Handler {
 	mux.Handle("GET /vendor/", assets)
 	mux.Handle("GET /themes/", assets)
 	mux.Handle("GET /js/", assets)
+	mux.Handle("GET /fonts/", assets)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		_, _, _, s, ok := av.Snapshot()
+		path, _, _, s, ok := av.Snapshot()
 		if !ok {
 			noVaultSelected(w, r, av)
 			return
@@ -434,7 +535,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 			entries = s.IndexAll()
 		}
 
-		content, err := renderFragment(browseTemplate, browseView{Entries: entries})
+		content, err := renderFragment(browseTemplate, browseView{Entries: entries, VaultLabel: pathLabel(path)})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -780,18 +881,79 @@ func New(av *activevault.ActiveVault) http.Handler {
 		}
 
 		canonical, _, _, _, _ := av.Snapshot()
-		saved, err := settings.Load()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := settings.Save(saved.WithVault(canonical)); err != nil {
+		if err := updateSettings(func(s settings.Settings) settings.Settings { return s.WithVault(canonical) }); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("HX-Refresh", "true")
 		w.WriteHeader(http.StatusOK)
+	})
+
+	// DELETE /vault: removes path from the picker's history and deletes its
+	// disposable Engines cache. If path is the currently active vault, this
+	// also clears the active selection entirely (forced switch to "no vault
+	// selected" — see ActiveVault.RemoveVault and Settings.WithoutVault) so
+	// removal never silently falls back to another history entry.
+	mux.HandleFunc("DELETE /vault", func(w http.ResponseWriter, r *http.Request) {
+		path, err := parseVaultPath(r)
+		if err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		canonical, err := av.RemoveVault(path)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := updateSettings(func(s settings.Settings) settings.Settings { return s.WithoutVault(canonical) }); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("HX-Refresh", "true")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// GET /vault/browse: powers the "Add new vault" modal's directory
+	// browser (a plain server-side listing, since browsers can never expose
+	// an absolute filesystem path from a native picker — see ADR-0011
+	// addendum). Returns the canonicalized path alongside its immediate
+	// subdirectories so the client always has a well-formed path to submit
+	// back, even if the query param it sent wasn't canonical.
+	mux.HandleFunc("GET /vault/browse", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Query().Get("path")
+		if path == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			path = home
+		}
+
+		canonical, err := vault.CanonicalPath(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := vault.ValidateRoot(canonical); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		dirs, err := vault.ListDirectories(canonical)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(browseDirectoriesResponse{Path: canonical, Directories: dirs})
 	})
 
 	mux.HandleFunc("PUT /theme", func(w http.ResponseWriter, r *http.Request) {
@@ -803,12 +965,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 
 		av.SetTheme(theme)
 
-		saved, err := settings.Load()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := settings.Save(saved.WithTheme(theme)); err != nil {
+		if err := updateSettings(func(s settings.Settings) settings.Settings { return s.WithTheme(theme) }); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

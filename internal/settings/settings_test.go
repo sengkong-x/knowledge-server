@@ -140,6 +140,39 @@ func TestWithVault_CapsHistoryLength(t *testing.T) {
 	}
 }
 
+func TestWithoutVault_RemovesPathFromHistoryLeavingVaultPathUntouched(t *testing.T) {
+	s := Settings{VaultPath: "/a", VaultHistory: []string{"/a", "/b", "/c"}}
+
+	got := s.WithoutVault("/b")
+
+	if got.VaultPath != "/a" {
+		t.Errorf("VaultPath = %q, want %q (unaffected, /b wasn't active)", got.VaultPath, "/a")
+	}
+	want := []string{"/a", "/c"}
+	if len(got.VaultHistory) != len(want) {
+		t.Fatalf("VaultHistory = %v, want %v", got.VaultHistory, want)
+	}
+	for i := range want {
+		if got.VaultHistory[i] != want[i] {
+			t.Errorf("VaultHistory[%d] = %q, want %q", i, got.VaultHistory[i], want[i])
+		}
+	}
+}
+
+func TestWithoutVault_RemovingTheActiveVaultAlsoClearsVaultPath(t *testing.T) {
+	s := Settings{VaultPath: "/a", VaultHistory: []string{"/a", "/b"}}
+
+	got := s.WithoutVault("/a")
+
+	if got.VaultPath != "" {
+		t.Errorf("VaultPath = %q, want empty after removing the active vault", got.VaultPath)
+	}
+	want := []string{"/b"}
+	if len(got.VaultHistory) != len(want) || got.VaultHistory[0] != want[0] {
+		t.Errorf("VaultHistory = %v, want %v", got.VaultHistory, want)
+	}
+}
+
 func TestWithTheme_SetsTheme(t *testing.T) {
 	s := Settings{}
 

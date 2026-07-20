@@ -1,11 +1,32 @@
+/* Inter, self-hosted (web/fonts, SIL OFL) rather than fetched from a CDN —
+   keeps the "no network font fetches" rule from the prior all-sans decision
+   intact while giving every platform (Windows' Segoe UI reads noticeably
+   more clinical than macOS' San Francisco) the same reading-tuned glyphs
+   instead of leaving legibility to whatever the OS ships. Variable font, so
+   one file covers the whole weight range already used (400/500/600/700). */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Italic-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* Type: one modern sans family throughout — headings lean on weight and
    tight tracking for hierarchy instead of switching to a serif, monospace
    stays reserved for anything catalog-like — note IDs, vault paths, tags —
-   read as call numbers, not prose. All system stacks; no network font
-   fetches. */
+   read as call numbers, not prose. */
 :root {
-  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
-  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --space-1: 0.25rem;
@@ -25,10 +46,19 @@ body {
   font-family: var(--font-body);
   font-size: 16px;
   line-height: 1.6;
-  max-width: 56rem;
+  max-width: 72rem;
   margin: 0 auto;
   padding: 0 var(--space-4) var(--space-5);
   transition: background-color 150ms ease, color 150ms ease;
+}
+
+/* Browse/search subtitle: "N notes in <vault>" / "N results for ...", sat
+   between the page h1 and the entry grid so each list view carries a bit of
+   dashboard-style context instead of just a bare heading. */
+.page-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 var(--space-2);
 }
 
 /* Note bodies read best at a narrower measure than the card/list views, so
@@ -114,6 +144,20 @@ button:focus-visible, input:focus-visible {
   outline-offset: 1px;
 }
 
+/* Primary action within a form/picker (Search submit, vault Switch) —
+   filled from rest instead of only on hover, so the one action the user is
+   most likely to take reads as the obvious next step rather than looking
+   identical to every secondary button on the page. */
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.button-primary:hover {
+  filter: brightness(1.08);
+}
+
 input[type="text"] {
   padding: var(--space-1) var(--space-2);
   transition: border-color 120ms ease;
@@ -136,9 +180,9 @@ form {
   list-style: none;
   margin: var(--space-3) 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: var(--space-3);
 }
 
 .entry-card {
@@ -149,13 +193,14 @@ form {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-resting);
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
 .entry-card:hover {
   border-color: var(--accent);
   box-shadow: var(--shadow);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 .entry-card-title {
@@ -186,6 +231,17 @@ form {
   border-radius: 999px;
   padding: 0.1em 0.6em;
 }
+
+/* Each tag is hashed (server-side, hueOf in server.go) to one of six
+   hues so recurring tags (adr, architecture, agent-docs, ...) read as
+   distinct categories at a glance in the browse/search grid, rather than
+   every tag rendering as the same flat gray chip regardless of meaning. */
+.tag-0 { color: var(--tag-0-fg); background: var(--tag-0-bg); border-color: transparent; }
+.tag-1 { color: var(--tag-1-fg); background: var(--tag-1-bg); border-color: transparent; }
+.tag-2 { color: var(--tag-2-fg); background: var(--tag-2-bg); border-color: transparent; }
+.tag-3 { color: var(--tag-3-fg); background: var(--tag-3-bg); border-color: transparent; }
+.tag-4 { color: var(--tag-4-fg); background: var(--tag-4-bg); border-color: transparent; }
+.tag-5 { color: var(--tag-5-fg); background: var(--tag-5-bg); border-color: transparent; }
 
 /* Empty state: shown for "no vault selected", empty search results, and any
    other zero-content view. Centered, quiet, icon-led — a call to action
@@ -292,6 +348,10 @@ nav {
   border-bottom: 1px solid var(--border);
   margin: 0 calc(var(--space-4) * -1);
   padding: var(--space-2) var(--space-4);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  box-shadow: var(--shadow-resting);
 }
 
 nav .nav-start {
@@ -303,7 +363,8 @@ nav .nav-start {
 nav .nav-end {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  position: relative;
 }
 
 .brand {
@@ -372,7 +433,7 @@ nav .vault-picker > button {
   align-items: center;
   gap: var(--space-1);
   font-family: var(--font-mono);
-  max-width: 22rem;
+  max-width: 12rem;
 }
 
 nav .vault-picker > button span {
@@ -381,10 +442,15 @@ nav .vault-picker > button span {
   white-space: nowrap;
 }
 
+/* Anchored to the trigger's right edge (not left) — the vault picker now
+   sits flush against the true right edge of the nav (see the space-between
+   fix above), so a left-anchored dropdown would grow further right and run
+   straight off the edge of the viewport; growing leftward from the right
+   edge instead keeps it fully on-screen. */
 nav .vault-picker > div[x-show] {
   position: absolute;
   top: 100%;
-  left: 0;
+  right: 0;
   z-index: 1;
   min-width: 18rem;
   max-width: 26rem;
@@ -399,15 +465,69 @@ nav .vault-picker > div[x-show] {
 nav .vault-picker ul {
   max-height: 14rem;
   overflow-y: auto;
+  margin: 0;
 }
 
-nav .vault-picker li button {
+nav .vault-picker li {
+  margin: 0;
+}
+
+/* Small uppercase label heading the switch-vault list — without it the
+   dropdown was just an unlabeled stack of paths, no context for what the
+   list represents. */
+.vault-menu-label {
+  margin: 0 0 var(--space-1);
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Each vault (and the "Add new vault" action) is a full-width menu row —
+   icon, label, optional trailing checkmark — instead of the bordered
+   id-chip pill style used for inline catalog references elsewhere; a
+   cramped stack of pills is what made the open dropdown look rough. */
+.vault-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   width: 100%;
+  border: none;
+  background: none;
+  border-radius: calc(var(--radius) - 4px);
+  padding: var(--space-2) var(--space-1);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
   text-align: left;
+}
+
+.vault-item svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.vault-item span {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  display: block;
+}
+
+.vault-item:hover {
+  background: var(--surface-alt);
+  color: var(--fg);
+  border-color: transparent;
+}
+
+.vault-item-active {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.vault-item-active svg:last-child {
+  color: var(--accent);
 }
 
 nav .vault-picker > div[x-show] > div {
@@ -416,10 +536,166 @@ nav .vault-picker > div[x-show] > div {
   padding-top: var(--space-2);
 }
 
-#vault-error {
-  display: block;
+[x-cloak] {
+  display: none !important;
+}
+
+/* Each history row pairs the full-width switch button with a small remove
+   control — .vault-item shrinks to share the row instead of claiming its
+   usual 100% width, and the remove control stays invisible until the row
+   is hovered/focused so the list doesn't look cluttered with an icon next
+   to every single entry at rest. */
+.vault-item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.vault-item-row .vault-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.vault-item-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  background: none;
+  border-radius: calc(var(--radius) - 4px);
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.vault-item-row:hover .vault-item-remove,
+.vault-item-remove:focus-visible {
+  opacity: 1;
+}
+
+.vault-item-remove:hover {
+  background: var(--surface-alt);
+  color: #b23b3b;
+}
+
+/* The "Add new vault" directory browser is teleported to <body> (see
+   navTemplate's x-teleport) so it renders as a true page-level modal rather
+   than being clipped by the nav dropdown's own overflow/positioning. */
+.vault-browser-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.vault-browser-panel {
+  width: min(32rem, calc(100vw - var(--space-4) * 2));
+  max-height: min(28rem, calc(100vh - var(--space-4) * 2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-3);
+}
+
+.vault-browser-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.vault-browser-path-segments,
+.vault-browser-path-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-alt);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-browser-path-segments {
+  display: flex;
+  overflow-x: auto;
+}
+
+.vault-browser-path-segment-wrap {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+/* Each ancestor directory is its own clickable target — going up the tree
+   is a click on an earlier segment, not something that requires switching
+   into the text-edit path meant for typing/pasting an arbitrary path. */
+.vault-browser-path-segment {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  color: inherit;
+}
+
+.vault-browser-path-segment:hover {
+  text-decoration: underline;
+}
+
+.vault-browser-path-sep {
+  color: var(--muted);
+  margin: 0 1px;
+}
+
+.vault-browser-path-input {
+  text-align: left;
+}
+
+.vault-browser-list {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vault-browser-empty {
   color: var(--muted);
   font-size: 0.85rem;
+  padding: var(--space-2) var(--space-1);
+}
+
+.vault-browser-error {
+  color: #b23b3b;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* Absolutely positioned against .nav-end (not a normal flex child of nav)
+   so it never affects nav's own space-between distribution — it used to
+   sit as a third top-level flex item there, which made justify-content:
+   space-between split the row into two gaps instead of one, dragging
+   .nav-end away from the true right edge toward the middle. */
+#vault-error {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
 }
 
 #vault-error:not(:empty) {

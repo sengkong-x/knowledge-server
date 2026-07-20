@@ -128,6 +128,25 @@ func (s Settings) WithVault(path string) Settings {
 	return s
 }
 
+// WithoutVault returns a copy of s with path removed from VaultHistory. If
+// path is the currently active VaultPath, that's cleared too — removing the
+// active vault forces a switch to "no vault selected" rather than falling
+// back to another history entry.
+func (s Settings) WithoutVault(path string) Settings {
+	history := make([]string, 0, len(s.VaultHistory))
+	for _, p := range s.VaultHistory {
+		if p != path {
+			history = append(history, p)
+		}
+	}
+	s.VaultHistory = history
+
+	if s.VaultPath == path {
+		s.VaultPath = ""
+	}
+	return s
+}
+
 // WithTheme returns a copy of s with Theme set to theme.
 func (s Settings) WithTheme(theme string) Settings {
 	s.Theme = theme

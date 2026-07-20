@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sengkong/knowledge-server/internal/vault"
 	"github.com/sengkong/knowledge-server/internal/vaultfixture"
 )
 
@@ -88,6 +89,92 @@ func TestSwitch_ToInvalidPathLeavesOutgoingVaultUntouched(t *testing.T) {
 		t.Error(`ByID("note-a") not found after a failed Switch, want the previous vault untouched`)
 	}
 	_ = path
+}
+
+func TestRemoveVault_DeletesCacheDirForAnInactiveVaultWithoutTouchingTheActiveOne(t *testing.T) {
+	setCacheHome(t)
+	active := t.TempDir()
+	vaultfixture.WriteNote(t, active, "note-a.md", noteA)
+	other := t.TempDir()
+	vaultfixture.WriteNote(t, other, "note-b.md", noteB)
+
+	av := New("light")
+	if err := av.Switch(active); err != nil {
+		t.Fatalf("Switch(active) returned error: %v", err)
+	}
+	waitReconciled(t, av)
+	if err := av.Switch(other); err != nil {
+		t.Fatalf("Switch(other) returned error: %v", err)
+	}
+	waitReconciled(t, av)
+	if err := av.Switch(active); err != nil {
+		t.Fatalf("Switch(active) again returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	otherCacheDir, err := vaultCacheDir(mustCanonical(t, other))
+	if err != nil {
+		t.Fatalf("vaultCacheDir(other): %v", err)
+	}
+	if _, err := os.Stat(otherCacheDir); err != nil {
+		t.Fatalf("other's cache dir does not exist before removal: %v", err)
+	}
+
+	if _, err := av.RemoveVault(other); err != nil {
+		t.Fatalf("RemoveVault(other) returned error: %v", err)
+	}
+
+	if _, err := os.Stat(otherCacheDir); !os.IsNotExist(err) {
+		t.Errorf("other's cache dir still exists after RemoveVault, want it deleted (stat err = %v)", err)
+	}
+
+	path, _, _, s, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false after removing an inactive vault, want the active vault untouched")
+	}
+	if path == "" {
+		t.Error("Snapshot path is empty, want the still-active vault's path")
+	}
+	if _, found := s.ByID("note-a"); !found {
+		t.Error(`ByID("note-a") not found, want the active vault's notes still indexed`)
+	}
+}
+
+func TestRemoveVault_RemovingTheActiveVaultClearsActiveState(t *testing.T) {
+	setCacheHome(t)
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", noteA)
+
+	av := New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	cacheDir, err := vaultCacheDir(mustCanonical(t, root))
+	if err != nil {
+		t.Fatalf("vaultCacheDir: %v", err)
+	}
+
+	if _, err := av.RemoveVault(root); err != nil {
+		t.Fatalf("RemoveVault returned error: %v", err)
+	}
+
+	if _, _, _, _, ok := av.Snapshot(); ok {
+		t.Error("Snapshot ok = true after removing the active vault, want no vault selected")
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Errorf("cache dir still exists after removing the active vault (stat err = %v)", err)
+	}
+}
+
+func mustCanonical(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := vault.CanonicalPath(path)
+	if err != nil {
+		t.Fatalf("vault.CanonicalPath(%q): %v", path, err)
+	}
+	return canonical
 }
 
 func TestSwitch_AToBToA_ReusesCachedEnginesForA(t *testing.T) {
