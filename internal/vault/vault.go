@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -107,6 +108,27 @@ func RefPath(provider VaultProvider, id string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("vault: no path found for note %q", id)
+}
+
+// ListDirectories returns the names of root's immediate subdirectories,
+// sorted alphabetically, excluding dotfolders (names starting with ".") and
+// plain files — the picker's "Add new vault" directory browser navigates
+// one level of this at a time rather than a ListNotes-style recursive walk.
+func ListDirectories(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		dirs = append(dirs, e.Name())
+	}
+	sort.Strings(dirs)
+	return dirs, nil
 }
 
 func ValidateRoot(root string) error {

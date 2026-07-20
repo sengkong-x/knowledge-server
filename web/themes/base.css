@@ -536,6 +536,153 @@ nav .vault-picker > div[x-show] > div {
   padding-top: var(--space-2);
 }
 
+[x-cloak] {
+  display: none !important;
+}
+
+/* Each history row pairs the full-width switch button with a small remove
+   control — .vault-item shrinks to share the row instead of claiming its
+   usual 100% width, and the remove control stays invisible until the row
+   is hovered/focused so the list doesn't look cluttered with an icon next
+   to every single entry at rest. */
+.vault-item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.vault-item-row .vault-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.vault-item-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  background: none;
+  border-radius: calc(var(--radius) - 4px);
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.vault-item-row:hover .vault-item-remove,
+.vault-item-remove:focus-visible {
+  opacity: 1;
+}
+
+.vault-item-remove:hover {
+  background: var(--surface-alt);
+  color: #b23b3b;
+}
+
+/* The "Add new vault" directory browser is teleported to <body> (see
+   navTemplate's x-teleport) so it renders as a true page-level modal rather
+   than being clipped by the nav dropdown's own overflow/positioning. */
+.vault-browser-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.vault-browser-panel {
+  width: min(32rem, calc(100vw - var(--space-4) * 2));
+  max-height: min(28rem, calc(100vh - var(--space-4) * 2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-3);
+}
+
+.vault-browser-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.vault-browser-path-segments,
+.vault-browser-path-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 4px);
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-alt);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-browser-path-segments {
+  display: flex;
+  overflow-x: auto;
+}
+
+.vault-browser-path-segment-wrap {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+/* Each ancestor directory is its own clickable target — going up the tree
+   is a click on an earlier segment, not something that requires switching
+   into the text-edit path meant for typing/pasting an arbitrary path. */
+.vault-browser-path-segment {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  color: inherit;
+}
+
+.vault-browser-path-segment:hover {
+  text-decoration: underline;
+}
+
+.vault-browser-path-sep {
+  color: var(--muted);
+  margin: 0 1px;
+}
+
+.vault-browser-path-input {
+  text-align: left;
+}
+
+.vault-browser-list {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vault-browser-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: var(--space-2) var(--space-1);
+}
+
+.vault-browser-error {
+  color: #b23b3b;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 /* Absolutely positioned against .nav-end (not a normal flex child of nav)
    so it never affects nav's own space-between distribution — it used to
    sit as a third top-level flex item there, which made justify-content:

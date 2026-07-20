@@ -18,6 +18,29 @@ func writeFile(t *testing.T, root, rel, content string) {
 	}
 }
 
+func TestListDirectories_ListsImmediateSubdirectoriesSortedExcludingFilesAndDotfolders(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "zebra/.gitkeep", "")
+	writeFile(t, root, "apple/.gitkeep", "")
+	writeFile(t, root, ".hidden/.gitkeep", "")
+	writeFile(t, root, "not-a-dir.txt", "plain file")
+
+	got, err := ListDirectories(root)
+	if err != nil {
+		t.Fatalf("ListDirectories returned error: %v", err)
+	}
+
+	want := []string{"apple", "zebra"}
+	if len(got) != len(want) {
+		t.Fatalf("ListDirectories = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ListDirectories[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestListNotes_DiscoversMarkdownFilesRecursively(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "linux/process.md", "# Process")

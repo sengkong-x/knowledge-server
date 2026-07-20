@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1047,6 +1048,228 @@ Body.
 	}
 }
 
+func TestRemoveVault_DropsInactiveVaultFromHistoryAndDeletesItsCache(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	rootA := t.TempDir()
+	vaultfixture.WriteNote(t, rootA, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+	rootB := t.TempDir()
+	vaultfixture.WriteNote(t, rootB, "note-b.md", `---
+title: Note B
+created: 2026-07-12
+---
+Body.
+`)
+
+	for _, root := range []string{rootA, rootB} {
+		req := httptest.NewRequest(http.MethodPut, "/vault", strings.NewReader(string(mustJSON(t, switchVaultRequest{Path: root}))))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT /vault(%s) status = %d, want %d", root, rec.Code, http.StatusOK)
+		}
+	}
+
+	canonicalA, err := vault.CanonicalPath(rootA)
+	if err != nil {
+		t.Fatalf("vault.CanonicalPath(rootA): %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/vault", strings.NewReader(string(mustJSON(t, switchVaultRequest{Path: rootA}))))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /vault status = %d, want %d, body = %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if rec.Header().Get("HX-Refresh") != "true" {
+		t.Error("HX-Refresh header not set on successful removal")
+	}
+
+	gotSettings := fetchSettings(t, handler)
+	for _, p := range gotSettings.VaultHistory {
+		if p == canonicalA {
+			t.Errorf("VaultHistory = %v, want %q removed", gotSettings.VaultHistory, canonicalA)
+		}
+	}
+
+	path, _, _, _, ok := av.Snapshot()
+	if !ok {
+		t.Fatal("Snapshot ok = false, want rootB to remain active")
+	}
+	if path == canonicalA {
+		t.Error("active path is the removed vault, want rootB still active")
+	}
+}
+
+func TestRemoveVault_RemovingActiveVaultClearsSettingsVaultPath(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	req := httptest.NewRequest(http.MethodPut, "/vault", strings.NewReader(string(mustJSON(t, switchVaultRequest{Path: root}))))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /vault status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/vault", strings.NewReader(string(mustJSON(t, switchVaultRequest{Path: root}))))
+	delRec := httptest.NewRecorder()
+	handler.ServeHTTP(delRec, delReq)
+
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /vault status = %d, want %d, body = %q", delRec.Code, http.StatusOK, delRec.Body.String())
+	}
+
+	if _, _, _, _, ok := av.Snapshot(); ok {
+		t.Error("Snapshot ok = true after removing the active vault, want no vault selected")
+	}
+
+	gotSettings := fetchSettings(t, handler)
+	if gotSettings.VaultPath != "" {
+		t.Errorf("settings VaultPath = %q, want empty after removing the active vault", gotSettings.VaultPath)
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+	return body
+}
+
+func fetchSettings(t *testing.T, handler http.Handler) settingsResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var got settingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling settings response: %v", err)
+	}
+	return got
+}
+
+func TestBrowseDirectories_ListsSubdirectoriesOfGivenPath(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	root := t.TempDir()
+	for _, name := range []string{"zebra", "apple", ".hidden"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", name, err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/vault/browse?path="+url.QueryEscape(root), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var got browseDirectoriesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+
+	canonicalRoot, err := vault.CanonicalPath(root)
+	if err != nil {
+		t.Fatalf("vault.CanonicalPath: %v", err)
+	}
+	if got.Path != canonicalRoot {
+		t.Errorf("Path = %q, want %q", got.Path, canonicalRoot)
+	}
+	wantDirs := []string{"apple", "zebra"}
+	if len(got.Directories) != len(wantDirs) {
+		t.Fatalf("Directories = %v, want %v", got.Directories, wantDirs)
+	}
+	for i := range wantDirs {
+		if got.Directories[i] != wantDirs[i] {
+			t.Errorf("Directories[%d] = %q, want %q", i, got.Directories[i], wantDirs[i])
+		}
+	}
+}
+
+func TestBrowseDirectories_ReturnsBadRequestForNonexistentPath(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	badPath := filepath.Join(t.TempDir(), "does-not-exist")
+	req := httptest.NewRequest(http.MethodGet, "/vault/browse?path="+url.QueryEscape(badPath), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestBrowseDirectories_DefaultsToHomeDirWhenPathOmitted(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "notes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/vault/browse", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var got browseDirectoriesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshaling response: %v", err)
+	}
+
+	canonicalHome, err := vault.CanonicalPath(home)
+	if err != nil {
+		t.Fatalf("vault.CanonicalPath: %v", err)
+	}
+	if got.Path != canonicalHome {
+		t.Errorf("Path = %q, want %q (HOME)", got.Path, canonicalHome)
+	}
+}
+
 func TestSwitchTheme_SetsThemeAndPersistsToSettings(t *testing.T) {
 	setConfigHome(t)
 
@@ -1144,6 +1367,59 @@ Body.
 	}
 }
 
+// TestEvents_ClosesStreamOnVaultRemoval is RemoveVault's counterpart to
+// TestEvents_ClosesStreamOnVaultSwitch: removing the active vault must
+// notify switch subscribers the same way Switch does, or an open /events
+// connection would sit quietly subscribed to a State nobody will ever
+// notify again.
+func TestEvents_ClosesStreamOnVaultRemoval(t *testing.T) {
+	setCacheHome(t)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("initial Switch returned error: %v", err)
+	}
+	handler := New(av)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/events")
+	if err != nil {
+		t.Fatalf("GET /events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if _, err := av.RemoveVault(root); err != nil {
+		t.Fatalf("RemoveVault returned error: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(resp.Body)
+		_, err := reader.ReadString('\n')
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("read from /events succeeded after removing the active vault, want the stream to have closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for /events to close after removing the active vault")
+	}
+}
+
 func TestBrowse_FullPageRenderIncludesNavWithVaultHistory(t *testing.T) {
 	setCacheHome(t)
 	setConfigHome(t)
@@ -1213,6 +1489,67 @@ Body.
 	body := rec.Body.String()
 	if strings.Contains(body, "<nav>") {
 		t.Errorf("body = %q, want an HTMX fragment response to omit the nav (it survives swaps by not being re-sent)", body)
+	}
+}
+
+func TestNav_HistoryEntriesEachHaveARemoveButton(t *testing.T) {
+	setCacheHome(t)
+	setConfigHome(t)
+
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", `---
+title: Note A
+created: 2026-07-12
+---
+Body.
+`)
+
+	av := activevault.New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	canonical, _, _, _, _ := av.Snapshot()
+	if err := settings.Save(settings.Settings{VaultPath: canonical, VaultHistory: []string{canonical, "/some/other/vault"}}); err != nil {
+		t.Fatalf("settings.Save: %v", err)
+	}
+
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `hx-delete="/vault"`) {
+		t.Errorf("body = %q, want a remove control issuing hx-delete=\"/vault\" per history row", body)
+	}
+	if !strings.Contains(body, `hx-vals='{"path": "/some/other/vault"}'`) {
+		t.Errorf("body = %q, want the remove control's hx-vals to carry that row's path", body)
+	}
+}
+
+func TestNav_AddVaultOpensDirectoryBrowserModalInsteadOfFreeTextInput(t *testing.T) {
+	setConfigHome(t)
+
+	av := activevault.New("light")
+	handler := New(av)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, `id="new-vault-path"`) {
+		t.Errorf("body = %q, want the old free-text vault path input removed", body)
+	}
+	if !strings.Contains(body, `class="vault-browser-modal"`) {
+		t.Errorf("body = %q, want a directory browser modal in the nav", body)
+	}
+	if !strings.Contains(body, "vaultBrowser()") {
+		t.Errorf("body = %q, want the modal driven by the vaultBrowser Alpine component", body)
+	}
+	if !strings.Contains(body, `/js/vault-browser.js`) {
+		t.Errorf("body = %q, want the vault-browser script included", body)
 	}
 }
 

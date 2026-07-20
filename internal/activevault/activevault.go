@@ -249,6 +249,54 @@ func (av *ActiveVault) Switch(newPath string) error {
 	return nil
 }
 
+// RemoveVault deletes path's on-disk Engines cache. If path is the
+// currently active vault, the active state is cleared entirely (closing its
+// watcher first) rather than falling back to another vault — the caller
+// (server.go's DELETE /vault handler) is responsible for also dropping path
+// from settings.VaultHistory. Returns the canonicalized path so the caller
+// doesn't need to canonicalize it a second time.
+func (av *ActiveVault) RemoveVault(path string) (string, error) {
+	canonical, err := vault.CanonicalPath(path)
+	if err != nil {
+		return "", fmt.Errorf("canonicalizing vault path: %w", err)
+	}
+
+	av.mu.Lock()
+	wasActive := av.path == canonical
+	if wasActive {
+		if err := av.watcher.Close(); err != nil {
+			av.log.Warn("closing removed vault's watcher", "vault", canonical, "error", err)
+		}
+		// No state.Save here (unlike Switch's outgoing-vault teardown and
+		// Shutdown): the cache dir this would persist to is deleted a few
+		// lines below, so saving first would just be immediately discarded
+		// work.
+		av.path = ""
+		av.provider = nil
+		av.store = nil
+		av.state = nil
+		av.watcher = nil
+		av.cachePaths = engines.Paths{}
+	}
+	av.mu.Unlock()
+
+	if wasActive {
+		// Mirrors Switch's own notifySwitch call: an /events subscriber
+		// (server.go) still thinks its State is live and needs telling
+		// otherwise, exactly as when Switch swaps in a different vault.
+		av.notifySwitch()
+	}
+
+	cacheDir, err := vaultCacheDir(canonical)
+	if err != nil {
+		return "", fmt.Errorf("resolving cache dir: %w", err)
+	}
+	if err := os.RemoveAll(cacheDir); err != nil {
+		return "", fmt.Errorf("removing cache dir %s: %w", cacheDir, err)
+	}
+	return canonical, nil
+}
+
 func (av *ActiveVault) logBuildReport(vaultPath string, report engines.BuildReport) {
 	for id, err := range report.Index.Failed {
 		av.log.Warn("note failed to index", "vault", vaultPath, "id", id, "error", err)
