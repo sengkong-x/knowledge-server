@@ -432,7 +432,7 @@ nav .vault-picker > button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   max-width: 12rem;
 }
 
@@ -563,6 +563,7 @@ nav .vault-picker > div[x-show] > div {
   justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
+  padding: 0;
   border: none;
   background: none;
   border-radius: calc(var(--radius) - 4px);

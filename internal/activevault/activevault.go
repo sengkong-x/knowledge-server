@@ -255,10 +255,36 @@ func (av *ActiveVault) Switch(newPath string) error {
 // (server.go's DELETE /vault handler) is responsible for also dropping path
 // from settings.VaultHistory. Returns the canonicalized path so the caller
 // doesn't need to canonicalize it a second time.
+//
+// path must already be canonical — the only caller passes entries read
+// back out of settings.VaultHistory, which are canonicalized once by
+// WithVault at the time they're added (see settings.Settings.WithVault).
+// RemoveVault relies on that: if path can no longer be resolved (e.g. its
+// directory was deleted or moved), it falls back to using path as-is
+// rather than failing, so a vault that no longer exists on disk can still
+// be cleared from history and cache. That fallback trusts path only as
+// far as it can verify without filesystem access — see the abs/clean
+// check below — so passing an arbitrary non-canonical path (relative,
+// unclean, or one that was simply never canonicalized) still fails rather
+// than silently corrupting the active-vault comparison or cache-dir
+// cleanup.
 func (av *ActiveVault) RemoveVault(path string) (string, error) {
 	canonical, err := vault.CanonicalPath(path)
 	if err != nil {
-		return "", fmt.Errorf("canonicalizing vault path: %w", err)
+		// EvalSymlinks (inside CanonicalPath) requires the path to exist,
+		// so it fails here whenever the vault's directory has already been
+		// deleted — exactly the case this fallback exists for. Filesystem
+		// resolution is unavailable at that point, but every truly
+		// canonical path is by construction already absolute and clean
+		// (filepath.Abs + filepath.EvalSymlinks never produce anything
+		// else), so requiring that much still catches a caller passing a
+		// relative or unclean path through this branch instead of
+		// silently trusting it outright.
+		abs, absErr := filepath.Abs(path)
+		if absErr != nil || abs != path {
+			return "", fmt.Errorf("canonicalizing vault path: %w", err)
+		}
+		canonical = path
 	}
 
 	av.mu.Lock()
