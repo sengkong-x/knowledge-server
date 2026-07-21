@@ -91,6 +91,8 @@ const (
 	iconPathPlus   = `<path d="M12 5v14M5 12h14"/>`
 	iconPathClose  = `<path d="M18 6 6 18M6 6l12 12"/>`
 	iconPathEdit   = `<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>`
+	iconPathFile   = `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>`
+	iconPathClock  = `<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>`
 )
 
 // svgIcon renders an inline SVG icon at the given size and stroke weight —
@@ -154,6 +156,14 @@ func pluralCount(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+// formatDate renders a note's Created frontmatter as a short, scannable
+// date for the entry-card footer. Created is a required frontmatter field
+// (parser.go rejects notes missing it before they ever reach the index),
+// so every entry passed here is guaranteed non-zero.
+func formatDate(t time.Time) string {
+	return t.Format("Jan 2, 2006")
+}
+
 // navTemplate is the vault-picker + theme-toggle chrome shown on every
 // page (there was no nav anywhere before this ticket). The picker lists
 // VaultHistory (from GET /settings) as switch triggers, plus an "Add new
@@ -176,7 +186,7 @@ func pluralCount(n int, noun string) string {
 // (x-data's initial "open" value), since Ticket 07 requires it be the
 // empty state's primary call to action, not a collapsed control the user
 // has to discover.
-var navTemplate = template.Must(template.New("nav").Funcs(template.FuncMap{"base": pathLabel}).Parse(`<nav>
+var navTemplate = template.Must(template.New("nav").Funcs(template.FuncMap{"base": pathLabel}).Parse(`<nav class="site-nav">
 <div class="nav-start">
 <span class="brand">` + string(svgIcon(20, "2", iconPathBook)) + ` Knowledge Server</span>
 <ul class="nav-links">
@@ -195,26 +205,26 @@ var navTemplate = template.Must(template.New("nav").Funcs(template.FuncMap{"base
 <div x-show="open" x-transition>
 <p class="vault-menu-label">Switch vault</p>
 <ul>
-{{$current := .CurrentPath}}{{range .History}}<li class="vault-item-row"><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="vault-item{{if eq . $current}} vault-item-active{{end}}" title="{{.}}">` + string(svgIcon(15, "2", iconPathVault)) + `<span>{{base .}}</span>{{if eq . $current}}` + string(svgIcon(15, "2", iconPathCheck)) + `{{end}}</button><button type="button" hx-delete="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="vault-item-remove" aria-label="Remove {{base .}} from vault history" title="Remove from history">` + string(svgIcon(13, "2", iconPathClose)) + `</button></li>
+{{$current := .CurrentPath}}{{range .History}}<li class="vault-item-row"><button hx-put="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="menu-row{{if eq . $current}} vault-item-active{{end}}" title="{{.}}">` + string(svgIcon(15, "2", iconPathVault)) + `<span>{{base .}}</span>{{if eq . $current}}` + string(svgIcon(15, "2", iconPathCheck)) + `{{end}}</button><button type="button" hx-delete="/vault" hx-vals='{"path": "{{.}}"}' hx-swap="none" data-error-target="#vault-error" class="vault-item-remove" aria-label="Remove {{base .}} from vault history" title="Remove from history">` + string(svgIcon(13, "2", iconPathClose)) + `</button></li>
 {{end}}</ul>
 <div x-data="vaultBrowser()">
-<button type="button" @click="openModal()" class="vault-item">` + string(svgIcon(15, "2", iconPathPlus)) + `<span>Add new vault&hellip;</span></button>
+<button type="button" @click="openModal()" class="menu-row">` + string(svgIcon(15, "2", iconPathPlus)) + `<span>Add new vault&hellip;</span></button>
 <template x-teleport="body">
 <div x-show="open" x-cloak class="vault-browser-modal" @keydown.escape.window="closeModal()" @click.self="closeModal()">
 <div class="vault-browser-panel" role="dialog" aria-modal="true" aria-label="Add new vault">
 <div class="vault-browser-breadcrumb">
-<nav class="vault-browser-path-segments" x-show="!editingPath" aria-label="Current path">
+<div class="vault-browser-path-segments" role="navigation" x-show="!editingPath" aria-label="Current path">
 <template x-for="seg in segments" :key="seg.path">
-<span class="vault-browser-path-segment-wrap"><button type="button" @click="load(seg.path)" x-text="seg.name" class="vault-browser-path-segment"></button><span class="vault-browser-path-sep" x-show="!seg.last">/</span></span>
+<span class="vault-browser-path-segment-wrap"><button type="button" @click="load(seg.path)" x-text="seg.name" class="vault-browser-path-segment"></button><span class="vault-browser-path-sep" x-show="seg.sep">/</span></span>
 </template>
-</nav>
+</div>
 <input type="text" x-show="editingPath" x-model="pathInput" @keydown.enter="jumpTo(pathInput)" @blur="editingPath = false" class="vault-browser-path-input" aria-label="Vault path">
 <button type="button" class="icon-button" x-show="!editingPath" @click="startEditingPath()" aria-label="Type a path directly" title="Type a path directly">` + string(svgIcon(14, "2", iconPathEdit)) + `</button>
 <button type="button" class="button-primary" @click="useFolder()" :disabled="pending">Use this folder</button>
 </div>
 <ul class="vault-browser-list">
 <template x-for="dir in directories" :key="dir">
-<li><button type="button" @click="navigate(dir)">` + string(svgIcon(14, "2", iconPathVault)) + `<span x-text="dir"></span></button></li>
+<li><button type="button" @click="navigate(dir)" class="menu-row">` + string(svgIcon(14, "2", iconPathVault)) + `<span x-text="dir"></span></button></li>
 </template>
 <template x-if="!pending && directories.length === 0"><li class="vault-browser-empty">No subfolders here.</li></template>
 </ul>
@@ -341,16 +351,55 @@ type noteDetailView struct {
 	Neighbors []string
 }
 
-// browseTemplate lists notes as links to their detail page. Each entry's ID
-// renders as a monospace "id-chip" (base.css) — a call-number-style
-// signature carried through everywhere a note ID/vault path appears in this
-// design, not just here.
-var browseTemplate = template.Must(template.New("browse").Funcs(template.FuncMap{"tags": renderTags, "pluralCount": pluralCount}).Parse(`<h1>Browse</h1>
+// entryCardView is the shape rendered by the shared "entryCard" template
+// below — both browseTemplate (from index.IndexEntry) and searchUITemplate
+// (from searchResultResponse, which also carries a Snippet) convert into
+// this common view rather than each maintaining its own copy of the card
+// markup, since the two were otherwise identical but for the snippet line.
+type entryCardView struct {
+	ID      string
+	Title   string
+	Tags    []string
+	Created time.Time
+	Snippet string
+}
+
+func entryCardFromIndex(e index.IndexEntry) entryCardView {
+	return entryCardView{ID: e.ID, Title: e.Title, Tags: e.Tags, Created: e.Created}
+}
+
+func entryCardFromSearch(r searchResultResponse) entryCardView {
+	return entryCardView{ID: r.ID, Title: r.Title, Tags: r.Tags, Created: r.Created, Snippet: r.Snippet}
+}
+
+// entryCardTemplateSrc defines the "entryCard" associated template shared by
+// browseTemplate and searchUITemplate: a file icon + title, tags as the
+// colorful "badges" that actually carry meaning (categorization), and the ID
+// + Created date below a hairline divider as plain muted metadata — the two
+// pieces of per-note info that used to render as visually-identical pills
+// (id-chip vs tag) no longer compete for the same "badge" reading.
+var entryCardTemplateSrc = `{{define "entryCard"}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">` + string(svgIcon(16, "2", iconPathFile)) + `<span>{{.Title}}</span></a>
+{{if .Snippet}}<p class="entry-card-snippet">{{.Snippet}}</p>{{end}}
+{{if .Tags}}<div class="entry-card-tags">{{tags .Tags}}</div>{{end}}
+<div class="entry-card-footer"><span class="entry-card-id">{{.ID}}</span><span class="entry-card-date">` + string(svgIcon(12, "2", iconPathClock)) + `{{formatDate .Created}}</span></div>
+</li>{{end}}`
+
+// entryCardFuncs is shared by both browseTemplate and searchUITemplate so
+// each can convert its own row type (index.IndexEntry / searchResultResponse)
+// into entryCardView before invoking the "entryCard" associated template.
+var entryCardFuncs = template.FuncMap{
+	"tags":                renderTags,
+	"pluralCount":         pluralCount,
+	"formatDate":          formatDate,
+	"entryCardFromIndex":  entryCardFromIndex,
+	"entryCardFromSearch": entryCardFromSearch,
+}
+
+// browseTemplate lists notes as links to their detail page.
+var browseTemplate = template.Must(template.Must(template.New("browse").Funcs(entryCardFuncs).Parse(entryCardTemplateSrc)).Parse(`<h1>Browse</h1>
 {{if .Entries}}<p class="page-meta">{{pluralCount (len .Entries) "note"}} in <span class="id-chip">{{.VaultLabel}}</span></p>
 <ul class="entry-list">
-{{range .Entries}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
-<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{tags .Tags}}</div>
-</li>
+{{range .Entries}}{{template "entryCard" (entryCardFromIndex .)}}
 {{end}}</ul>{{else}}<div class="empty-state">
 ` + string(svgIcon(40, "1.5", iconPathBook)) + `
 <p>This vault has no notes yet.</p>
@@ -362,7 +411,7 @@ type browseView struct {
 }
 
 // searchUITemplate renders a search form plus any matching results.
-var searchUITemplate = template.Must(template.New("searchUI").Funcs(template.FuncMap{"tags": renderTags, "pluralCount": pluralCount}).Parse(`<h1>Search</h1>
+var searchUITemplate = template.Must(template.Must(template.New("searchUI").Funcs(entryCardFuncs).Parse(entryCardTemplateSrc)).Parse(`<h1>Search</h1>
 <form hx-get="/search/ui" hx-target="#page-content" class="search-bar">
 ` + string(svgIcon(16, "2", iconPathSearch)) + `
 <input type="text" name="q" value="{{.Query}}" placeholder="Search notes..." aria-label="Search notes" autofocus>
@@ -370,10 +419,7 @@ var searchUITemplate = template.Must(template.New("searchUI").Funcs(template.Fun
 </form>
 {{if .Results}}<p class="page-meta">{{pluralCount (len .Results) "result"}} for &ldquo;{{.Query}}&rdquo;</p>
 <ul class="entry-list">
-{{range .Results}}<li class="entry-card"><a href="/notes/{{.ID}}" class="entry-card-title">{{.Title}}</a>
-{{if .Snippet}}<p class="entry-card-snippet">{{.Snippet}}</p>{{end}}
-<div class="entry-card-meta"><span class="id-chip">{{.ID}}</span>{{tags .Tags}}</div>
-</li>
+{{range .Results}}{{template "entryCard" (entryCardFromSearch .)}}
 {{end}}</ul>{{else if .Query}}<div class="empty-state">
 ` + string(svgIcon(40, "1.5", iconPathSearch)) + `
 <p>No notes match &ldquo;{{.Query}}&rdquo;.</p>
@@ -402,11 +448,12 @@ type healthResponse struct {
 }
 
 type searchResultResponse struct {
-	ID      string   `json:"id"`
-	Title   string   `json:"title"`
-	Path    string   `json:"path"`
-	Tags    []string `json:"tags"`
-	Snippet string   `json:"snippet"`
+	ID      string    `json:"id"`
+	Title   string    `json:"title"`
+	Path    string    `json:"path"`
+	Tags    []string  `json:"tags"`
+	Snippet string    `json:"snippet"`
+	Created time.Time `json:"created"`
 }
 
 type neighborsResponse struct {
@@ -565,6 +612,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 					Path:    entry.Path,
 					Tags:    entry.Tags,
 					Snippet: m.Snippet,
+					Created: entry.Created,
 				})
 			}
 		}
@@ -760,6 +808,7 @@ func New(av *activevault.ActiveVault) http.Handler {
 				Path:    entry.Path,
 				Tags:    entry.Tags,
 				Snippet: snippets[entry.ID],
+				Created: entry.Created,
 			})
 		}
 
