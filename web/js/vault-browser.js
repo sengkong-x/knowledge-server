@@ -32,6 +32,10 @@ function vaultBrowser() {
       }
       segments.forEach((seg, i) => {
         seg.last = i === segments.length - 1;
+        // The root segment's own label is already "/", so it doesn't need
+        // a separator glyph after it too (that rendered as a "/ /" double
+        // slash) — every other non-last segment still gets one.
+        seg.sep = !seg.last && i !== 0;
       });
       return segments;
     },

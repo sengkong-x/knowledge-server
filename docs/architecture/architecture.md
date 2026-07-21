@@ -1,5 +1,5 @@
 ---
-title: Architecture
+title: Knowledge Server
 created: 2026-07-18
 tags: [architecture]
 ---

@@ -168,6 +168,56 @@ func TestRemoveVault_RemovingTheActiveVaultClearsActiveState(t *testing.T) {
 	}
 }
 
+// This is the exact scenario RemoveVault's fallback exists for: the vault
+// directory is gone by the time removal is requested, so CanonicalPath can
+// no longer resolve it via EvalSymlinks. The path passed in must still be
+// usable for removal — see the precondition documented on RemoveVault.
+func TestRemoveVault_RemovingTheActiveVaultAfterItsDirectoryWasDeletedStillClearsState(t *testing.T) {
+	setCacheHome(t)
+	root := t.TempDir()
+	vaultfixture.WriteNote(t, root, "note-a.md", noteA)
+
+	av := New("light")
+	if err := av.Switch(root); err != nil {
+		t.Fatalf("Switch returned error: %v", err)
+	}
+	waitReconciled(t, av)
+
+	canonical := mustCanonical(t, root)
+	cacheDir, err := vaultCacheDir(canonical)
+	if err != nil {
+		t.Fatalf("vaultCacheDir: %v", err)
+	}
+
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatalf("removing vault directory: %v", err)
+	}
+
+	if _, err := av.RemoveVault(canonical); err != nil {
+		t.Fatalf("RemoveVault returned error: %v", err)
+	}
+
+	if _, _, _, _, ok := av.Snapshot(); ok {
+		t.Error("Snapshot ok = true after removing the active vault, want no vault selected")
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Errorf("cache dir still exists after removing the active vault (stat err = %v)", err)
+	}
+}
+
+// RemoveVault's fallback for an unresolvable path only trusts it as far
+// as it can verify without filesystem access (absolute and clean); a
+// relative path — which no successful CanonicalPath call could ever have
+// produced — must still be rejected rather than silently accepted.
+func TestRemoveVault_RejectsANonCanonicalPathEvenWhenUnresolvable(t *testing.T) {
+	setCacheHome(t)
+	av := New("light")
+
+	if _, err := av.RemoveVault("relative/does-not-exist"); err == nil {
+		t.Fatal("RemoveVault with a relative, nonexistent path returned no error, want error")
+	}
+}
+
 func mustCanonical(t *testing.T, path string) string {
 	t.Helper()
 	canonical, err := vault.CanonicalPath(path)

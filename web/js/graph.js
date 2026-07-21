@@ -1,4 +1,13 @@
-document.addEventListener("DOMContentLoaded", function () {
+// Not gated on a plain DOMContentLoaded listener: htmx's SSE-driven live
+// reload (see layoutTemplate in server.go) swaps in a fresh #page-content
+// — including a brand-new #cy and a freshly-inserted copy of this very
+// script tag — on every content change, well after the document's single
+// DOMContentLoaded has already fired. A listener registered here would
+// then never run again, leaving the page stuck on the "Loading graph…"
+// placeholder. Running immediately once the DOM is parsed (which is
+// already guaranteed by the time this script runs, whether on first page
+// load or after an htmx swap) re-initializes Cytoscape every time.
+(function () {
   var container = document.getElementById("cy");
   if (!container) return;
 
@@ -61,4 +70,4 @@ document.addEventListener("DOMContentLoaded", function () {
       container.classList.add("cy-loaded", "cy-error");
       container.textContent = "Failed to load graph data.";
     });
-});
+})();

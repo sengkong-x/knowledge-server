@@ -188,7 +188,7 @@ form {
 .entry-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
   padding: var(--space-3);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -204,22 +204,66 @@ form {
 }
 
 .entry-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-family: var(--font-display);
   font-size: 1.1rem;
   font-weight: 600;
 }
 
-.entry-card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
+.entry-card-title svg {
+  flex: none;
+  color: var(--muted);
 }
 
 .entry-card-snippet {
   color: var(--muted);
   font-size: 0.9rem;
   margin: 0;
+}
+
+/* Tags are the one piece of per-note metadata worth calling a "badge" —
+   hue-colored, meant to catch the eye as categorization. The ID/date pair
+   below (.entry-card-footer) is deliberately quieter (muted, no chip/pill,
+   divided by a hairline) so the two don't compete for the same reading;
+   before this they were both rendered as same-shape pills side by side,
+   which made it unclear that one was an identifier and the other a tag. */
+.entry-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.entry-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.entry-card-id {
+  font-family: var(--font-mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-card-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  flex: none;
+}
+
+.entry-card-date svg {
+  flex: none;
 }
 
 .tag {
@@ -337,8 +381,13 @@ form {
 
 /* Nav: the very first chrome this layout has had (Ticket 07). A quiet
    header bar, not a dashboard — separated from page content by a hairline
-   border, matching the reading-tool tone of the rest of the design. */
-nav {
+   border, matching the reading-tool tone of the rest of the design.
+   Scoped to .site-nav rather than a bare `nav` element selector — this
+   used to be a bare tag selector, which silently hijacked the "Add new
+   vault" modal's breadcrumb (also a semantic `<nav>`) with this bar's own
+   flex/sticky/background chrome. Any future `<nav>` added elsewhere would
+   collide the same way against a bare tag selector. */
+.site-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -354,13 +403,13 @@ nav {
   box-shadow: var(--shadow-resting);
 }
 
-nav .nav-start {
+.site-nav .nav-start {
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-nav .nav-end {
+.site-nav .nav-end {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -418,25 +467,25 @@ nav .nav-end {
   padding: 0;
 }
 
-nav ul {
+.site-nav ul {
   list-style: none;
   padding: 0;
   margin: var(--space-2) 0;
 }
 
-nav .vault-picker {
+.site-nav .vault-picker {
   position: relative;
 }
 
-nav .vault-picker > button {
+.site-nav .vault-picker > button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   max-width: 12rem;
 }
 
-nav .vault-picker > button span {
+.site-nav .vault-picker > button span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -447,7 +496,7 @@ nav .vault-picker > button span {
    fix above), so a left-anchored dropdown would grow further right and run
    straight off the edge of the viewport; growing leftward from the right
    edge instead keeps it fully on-screen. */
-nav .vault-picker > div[x-show] {
+.site-nav .vault-picker > div[x-show] {
   position: absolute;
   top: 100%;
   right: 0;
@@ -462,13 +511,13 @@ nav .vault-picker > div[x-show] {
   margin-top: var(--space-1);
 }
 
-nav .vault-picker ul {
+.site-nav .vault-picker ul {
   max-height: 14rem;
   overflow-y: auto;
   margin: 0;
 }
 
-nav .vault-picker li {
+.site-nav .vault-picker li {
   margin: 0;
 }
 
@@ -485,11 +534,14 @@ nav .vault-picker li {
   letter-spacing: 0.04em;
 }
 
-/* Each vault (and the "Add new vault" action) is a full-width menu row —
-   icon, label, optional trailing checkmark — instead of the bordered
-   id-chip pill style used for inline catalog references elsewhere; a
-   cramped stack of pills is what made the open dropdown look rough. */
-.vault-item {
+/* Shared full-width dropdown-menu row — icon, label, optional trailing
+   checkmark — instead of the bordered id-chip pill style used for inline
+   catalog references elsewhere; a cramped stack of pills is what made the
+   open dropdown look rough. Used by actual vault rows (paired with
+   vault-item-active below), the "Add new vault" action, and the directory
+   browser's folder rows — kept name-neutral since not every row it styles
+   represents a Vault. */
+.menu-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -503,19 +555,19 @@ nav .vault-picker li {
   text-align: left;
 }
 
-.vault-item svg {
+.menu-row svg {
   flex: none;
   color: var(--muted);
 }
 
-.vault-item span {
+.menu-row span {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.vault-item:hover {
+.menu-row:hover {
   background: var(--surface-alt);
   color: var(--fg);
   border-color: transparent;
@@ -530,7 +582,7 @@ nav .vault-picker li {
   color: var(--accent);
 }
 
-nav .vault-picker > div[x-show] > div {
+.site-nav .vault-picker > div[x-show] > div {
   border-top: 1px solid var(--border);
   margin-top: var(--space-2);
   padding-top: var(--space-2);
@@ -541,7 +593,7 @@ nav .vault-picker > div[x-show] > div {
 }
 
 /* Each history row pairs the full-width switch button with a small remove
-   control — .vault-item shrinks to share the row instead of claiming its
+   control — .menu-row shrinks to share the row instead of claiming its
    usual 100% width, and the remove control stays invisible until the row
    is hovered/focused so the list doesn't look cluttered with an icon next
    to every single entry at rest. */
@@ -551,7 +603,7 @@ nav .vault-picker > div[x-show] > div {
   gap: var(--space-1);
 }
 
-.vault-item-row .vault-item {
+.vault-item-row .menu-row {
   flex: 1;
   min-width: 0;
 }
@@ -563,6 +615,7 @@ nav .vault-picker > div[x-show] > div {
   justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
+  padding: 0;
   border: none;
   background: none;
   border-radius: calc(var(--radius) - 4px);
@@ -725,12 +778,12 @@ nav .vault-picker > div[x-show] > div {
     padding: 0 var(--space-3) var(--space-4);
   }
 
-  nav {
+  .site-nav {
     margin: 0 calc(var(--space-3) * -1);
     padding: var(--space-2) var(--space-3);
   }
 
-  nav .nav-start {
+  .site-nav .nav-start {
     flex-wrap: wrap;
     row-gap: var(--space-2);
   }
@@ -740,7 +793,7 @@ nav .vault-picker > div[x-show] > div {
     justify-content: space-between;
   }
 
-  nav .vault-picker > button {
+  .site-nav .vault-picker > button {
     max-width: 10rem;
   }
 

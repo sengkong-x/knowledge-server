@@ -1452,7 +1452,7 @@ Body.
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "<nav>") {
+	if !strings.Contains(body, "<nav ") {
 		t.Errorf("body = %q, want a <nav> element on a full page render", body)
 	}
 	if !strings.Contains(body, canonical) {
@@ -1487,7 +1487,7 @@ Body.
 	}
 
 	body := rec.Body.String()
-	if strings.Contains(body, "<nav>") {
+	if strings.Contains(body, "<nav ") {
 		t.Errorf("body = %q, want an HTMX fragment response to omit the nav (it survives swaps by not being re-sent)", body)
 	}
 }
